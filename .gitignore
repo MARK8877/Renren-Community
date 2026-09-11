@@ -1,0 +1,14 @@
+.DS_Store
+.env
+**/.env
+**/node_modules/
+**/dist/
+**/.dart_tool/
+**/build/
+**/.idea/
+**/*.log
+services/api/scraper/.venv/
+work/
+work/mysql-data/
+work/mysql-runtime/
+work/*-cache/

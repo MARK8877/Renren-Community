@@ -1,0 +1,7 @@
+{
+  "queries": ["AI 创作", "产品设计", "摄影", "科技", "视频剪辑"],
+  "platforms": ["youtube", "x", "douyin", "web"],
+  "perQueryLimit": 20,
+  "maxCandidates": 200,
+  "sinceDays": 30
+}

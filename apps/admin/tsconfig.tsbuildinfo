@@ -1,0 +1,1 @@
+{"root":["./src/env.d.ts","./src/main.ts","./src/api/auth.ts","./src/app.vue","./src/views/dashboardview.vue","./src/views/loginview.vue"],"version":"5.8.3"}

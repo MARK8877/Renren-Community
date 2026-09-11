@@ -1,0 +1,16 @@
+:root { font-family: Inter, system-ui, sans-serif; color: #172033; background: #f5f7fb; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button { border: 0; border-radius: 8px; padding: 12px 16px; color: white; background: #635bff; cursor: pointer; }
+input { width: 100%; margin-top: 8px; padding: 12px; border: 1px solid #d8deea; border-radius: 8px; }
+label { display: block; margin: 16px 0; }
+.centered-page { min-height: 100vh; display: grid; place-items: center; }
+.card { background: white; border-radius: 14px; padding: 24px; box-shadow: 0 8px 24px #18213a0d; }
+.login-card { width: min(420px, calc(100% - 32px)); }
+.error { color: #d92d20; }
+.admin-layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+.admin-layout aside { padding: 24px; color: white; background: #172033; }
+.admin-layout main { padding: 32px; }
+.metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.metric-grid strong { display: block; margin-top: 12px; font-size: 30px; }
+@media (max-width: 800px) { .metric-grid { grid-template-columns: 1fr 1fr; } }
