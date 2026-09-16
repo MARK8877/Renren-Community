@@ -11,8 +11,8 @@ import (
 var ErrNotFound = errors.New("account not found")
 
 type User struct {
-	ID                                                            uint64
-	Email, Phone, PasswordHash, Nickname, AvatarURL, Role, Status string
+	ID                                                                 uint64
+	Email, Phone, PasswordHash, Nickname, AvatarURL, Bio, Role, Status string
 }
 type Repository struct{ db *sql.DB }
 
@@ -31,7 +31,7 @@ func (r *Repository) Create(ctx context.Context, email, phone, passwordHash, nic
 }
 
 func (r *Repository) ByIdentifier(ctx context.Context, identifier string) (User, error) {
-	query := `SELECT id,COALESCE(email,''),COALESCE(phone,''),password_hash,nickname,COALESCE(avatar_url,''),role,status FROM users WHERE `
+	query := `SELECT id,COALESCE(email,''),COALESCE(phone,''),password_hash,nickname,COALESCE(avatar_url,''),COALESCE(bio,''),role,status FROM users WHERE `
 	if strings.Contains(identifier, "@") {
 		query += "email=?"
 	} else {
@@ -41,7 +41,22 @@ func (r *Repository) ByIdentifier(ctx context.Context, identifier string) (User,
 }
 
 func (r *Repository) ByID(ctx context.Context, id uint64) (User, error) {
-	return scan(r.db.QueryRowContext(ctx, `SELECT id,COALESCE(email,''),COALESCE(phone,''),password_hash,nickname,COALESCE(avatar_url,''),role,status FROM users WHERE id=?`, id))
+	return scan(r.db.QueryRowContext(ctx, `SELECT id,COALESCE(email,''),COALESCE(phone,''),password_hash,nickname,COALESCE(avatar_url,''),COALESCE(bio,''),role,status FROM users WHERE id=?`, id))
+}
+
+func (r *Repository) UpdateProfile(ctx context.Context, id uint64, nickname, bio string) (User, error) {
+	result, err := r.db.ExecContext(ctx, "UPDATE users SET nickname=?,bio=? WHERE id=?", nickname, bio, id)
+	if err != nil {
+		return User{}, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return User{}, err
+	}
+	if changed == 0 {
+		return User{}, ErrNotFound
+	}
+	return r.ByID(ctx, id)
 }
 
 func (r *Repository) RecordLogin(ctx context.Context, id uint64) error {
@@ -53,7 +68,7 @@ type scanner interface{ Scan(...any) error }
 
 func scan(row scanner) (User, error) {
 	var u User
-	if err := row.Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Nickname, &u.AvatarURL, &u.Role, &u.Status); err != nil {
+	if err := row.Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Nickname, &u.AvatarURL, &u.Bio, &u.Role, &u.Status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return User{}, ErrNotFound
 		}

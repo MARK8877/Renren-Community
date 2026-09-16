@@ -17,8 +17,85 @@ const _videoCoral = Color(0xFFFE2C55);
 const _videoActionRailWidth = 66.0;
 const _videoActionRailRightInset = 12.0;
 const _videoContentActionGap = 18.0;
-const _videoOverlayBottomInset = 24.0;
+const _videoOverlayBottomInset = 12.0;
 const _videoPageSize = 20;
+
+class _SinglePageScrollPhysics extends ScrollPhysics {
+  const _SinglePageScrollPhysics({
+    required this.startPageProvider,
+    super.parent,
+  });
+
+  final int? Function() startPageProvider;
+
+  @override
+  _SinglePageScrollPhysics applyTo(ScrollPhysics? ancestor) {
+    return _SinglePageScrollPhysics(
+      parent: buildParent(ancestor),
+      startPageProvider: startPageProvider,
+    );
+  }
+
+  @override
+  double carriedMomentum(double existingVelocity) => 0;
+
+  @override
+  double applyPhysicsToUserOffset(ScrollMetrics position, double offset) {
+    final adjustedOffset = super.applyPhysicsToUserOffset(position, offset);
+    final startPage = startPageProvider();
+    if (startPage == null || position.viewportDimension <= 0) {
+      return adjustedOffset;
+    }
+
+    final viewport = position.viewportDimension;
+    final minPixels = max(position.minScrollExtent, (startPage - 1) * viewport);
+    final maxPixels = min(position.maxScrollExtent, (startPage + 1) * viewport);
+    final candidate = position.pixels - adjustedOffset;
+    if (candidate < minPixels) return position.pixels - minPixels;
+    if (candidate > maxPixels) return position.pixels - maxPixels;
+    return adjustedOffset;
+  }
+
+  @override
+  Simulation? createBallisticSimulation(
+    ScrollMetrics position,
+    double velocity,
+  ) {
+    if (position.viewportDimension <= 0 || position.outOfRange) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+
+    final tolerance = toleranceFor(position);
+    final viewport = position.viewportDimension;
+    final currentPage = position.pixels / viewport;
+    final velocityPage = velocity < -tolerance.velocity
+        ? -0.5
+        : velocity > tolerance.velocity
+        ? 0.5
+        : 0.0;
+    var targetPage = (currentPage + velocityPage).roundToDouble();
+    final startPage = startPageProvider();
+    if (startPage != null) {
+      targetPage = targetPage.clamp(startPage - 1, startPage + 1).toDouble();
+    }
+    targetPage = targetPage
+        .clamp(
+          position.minScrollExtent / viewport,
+          position.maxScrollExtent / viewport,
+        )
+        .toDouble();
+
+    final targetPixels = targetPage * viewport;
+    if (targetPixels == position.pixels) return null;
+    return ScrollSpringSimulation(
+      spring,
+      position.pixels,
+      targetPixels,
+      velocity,
+      tolerance: tolerance,
+    );
+  }
+}
 
 class _VideoFeedItem {
   const _VideoFeedItem({
@@ -350,6 +427,7 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
   late final VideoApi videoApi;
   late final VideoPagination remotePagination;
   late final PageController pageController;
+  late final _SinglePageScrollPhysics pagePhysics;
   final commentInput = TextEditingController();
   final commentFocusNode = FocusNode();
   final likedVideos = <String>{};
@@ -366,6 +444,7 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
   bool loadMoreFailed = false;
   bool paused = false;
   bool showLikeBurst = false;
+  int? activeDragStartPage;
   int commentSequence = 0;
 
   VideoPlayerController? get currentController =>
@@ -384,6 +463,10 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
     );
     currentIndex = widget.initialIndex.clamp(0, videoItems.length - 1);
     pageController = PageController(initialPage: currentIndex);
+    pagePhysics = _SinglePageScrollPhysics(
+      parent: const BouncingScrollPhysics(),
+      startPageProvider: () => activeDragStartPage,
+    );
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => prepareAround(currentIndex),
     );
@@ -577,6 +660,19 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
     paused ? controller.pause() : controller.play();
   }
 
+  bool handleScrollNotification(ScrollNotification notification) {
+    if (notification.depth != 0) return false;
+    if (notification is ScrollStartNotification) {
+      final page = notification.metrics.viewportDimension > 0
+          ? notification.metrics.pixels / notification.metrics.viewportDimension
+          : currentIndex.toDouble();
+      activeDragStartPage = page.round();
+    } else if (notification is ScrollEndNotification) {
+      activeDragStartPage = null;
+    }
+    return false;
+  }
+
   void pauseForOverlay() {
     final controller = currentController;
     if (controller?.value.isInitialized == true) {
@@ -629,6 +725,7 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
     final expandedComments = <String>{};
     _CommentReplyTarget? replyTarget;
     String? pendingImage;
+    var showTools = false;
     var showEmojiPanel = false;
     var showMentionPanel = false;
     await showModalBottomSheet<void>(
@@ -641,6 +738,8 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
             video.id,
             () => _buildSampleComments(video.id),
           );
+          final hasDraft =
+              commentInput.text.trim().isNotEmpty || pendingImage != null;
           return DraggableScrollableSheet(
             key: const Key('video-comments-sheet'),
             initialChildSize: 0.78,
@@ -717,324 +816,425 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
                       child: Container(
                         color: Colors.white,
                         padding: const EdgeInsets.fromLTRB(10, 7, 10, 8),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (replyTarget != null)
-                              Container(
-                                key: const Key('video-comment-reply-banner'),
-                                margin: const EdgeInsets.only(bottom: 7),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 7,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF5F5F7),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        '回复 @${replyTarget!.user}',
-                                        style: const TextStyle(
-                                          color: Color(0xFF676975),
-                                          fontSize: 13,
+                        child: AnimatedSize(
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOutCubic,
+                          alignment: Alignment.bottomCenter,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (replyTarget != null)
+                                Container(
+                                  key: const Key('video-comment-reply-banner'),
+                                  margin: const EdgeInsets.only(bottom: 7),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 7,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF5F5F7),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          '回复 @${replyTarget!.user}',
+                                          style: const TextStyle(
+                                            color: Color(0xFF676975),
+                                            fontSize: 13,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                    GestureDetector(
-                                      key: const Key(
-                                        'cancel-video-comment-reply',
-                                      ),
-                                      onTap: () => setSheetState(
-                                        () => replyTarget = null,
-                                      ),
-                                      child: const Icon(
-                                        Icons.close_rounded,
-                                        size: 17,
-                                        color: Color(0xFF8B8D96),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            if (pendingImage != null)
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: Stack(
-                                  clipBehavior: Clip.none,
-                                  children: [
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(8),
-                                      child: Image.asset(
-                                        pendingImage!,
+                                      GestureDetector(
                                         key: const Key(
-                                          'video-comment-image-preview',
-                                        ),
-                                        width: 62,
-                                        height: 62,
-                                        fit: BoxFit.cover,
-                                      ),
-                                    ),
-                                    Positioned(
-                                      right: -7,
-                                      top: -7,
-                                      child: GestureDetector(
-                                        key: const Key(
-                                          'remove-video-comment-image',
+                                          'cancel-video-comment-reply',
                                         ),
                                         onTap: () => setSheetState(
-                                          () => pendingImage = null,
+                                          () => replyTarget = null,
                                         ),
-                                        child: const CircleAvatar(
-                                          radius: 9,
-                                          backgroundColor: Color(0xFF555760),
-                                          child: Icon(
-                                            Icons.close_rounded,
-                                            size: 12,
-                                            color: Colors.white,
+                                        child: const Icon(
+                                          Icons.close_rounded,
+                                          size: 17,
+                                          color: Color(0xFF8B8D96),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              if (pendingImage != null)
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Image.asset(
+                                          pendingImage!,
+                                          key: const Key(
+                                            'video-comment-image-preview',
+                                          ),
+                                          width: 62,
+                                          height: 62,
+                                          fit: BoxFit.cover,
+                                        ),
+                                      ),
+                                      Positioned(
+                                        right: -7,
+                                        top: -7,
+                                        child: GestureDetector(
+                                          key: const Key(
+                                            'remove-video-comment-image',
+                                          ),
+                                          onTap: () => setSheetState(
+                                            () => pendingImage = null,
+                                          ),
+                                          child: const CircleAvatar(
+                                            radius: 9,
+                                            backgroundColor: Color(0xFF555760),
+                                            child: Icon(
+                                              Icons.close_rounded,
+                                              size: 12,
+                                              color: Colors.white,
+                                            ),
                                           ),
                                         ),
                                       ),
+                                    ],
+                                  ),
+                                ),
+                              if (pendingImage != null)
+                                const SizedBox(height: 7),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  ChatAvatar.person(
+                                    key: const Key('video-comment-my-avatar'),
+                                    name: widget.session.nickname,
+                                    radius: 17,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Container(
+                                      key: const Key(
+                                        'video-comment-input-shell',
+                                      ),
+                                      constraints: const BoxConstraints(
+                                        minHeight: 44,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(24),
+                                      ),
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.end,
+                                        children: [
+                                          Expanded(
+                                            child: TextField(
+                                              key: const Key(
+                                                'video-comment-input',
+                                              ),
+                                              controller: commentInput,
+                                              focusNode: commentFocusNode,
+                                              minLines: 1,
+                                              maxLines: 1,
+                                              textInputAction:
+                                                  TextInputAction.newline,
+                                              onChanged: (_) =>
+                                                  setSheetState(() {}),
+                                              cursorColor: _videoPurple,
+                                              style: const TextStyle(
+                                                color: Color(0xFF202231),
+                                                fontSize: 14,
+                                                height: 1.25,
+                                              ),
+                                              decoration: InputDecoration(
+                                                hintText: '礼貌评论，开心大家！',
+                                                hintStyle: const TextStyle(
+                                                  color: Color(0xFF9295A1),
+                                                  fontSize: 14,
+                                                  height: 1.25,
+                                                ),
+                                                isDense: true,
+                                                filled: false,
+                                                contentPadding:
+                                                    const EdgeInsets.fromLTRB(
+                                                      18,
+                                                      10,
+                                                      18,
+                                                      10,
+                                                    ),
+                                                border:
+                                                    const OutlineInputBorder(
+                                                      borderSide: BorderSide(
+                                                        color: Color(
+                                                          0xFFB8B9BF,
+                                                        ),
+                                                        width: 2,
+                                                      ),
+                                                      borderRadius:
+                                                          BorderRadius.all(
+                                                            Radius.circular(24),
+                                                          ),
+                                                    ),
+                                                enabledBorder:
+                                                    const OutlineInputBorder(
+                                                      borderSide: BorderSide(
+                                                        color: Color(
+                                                          0xFFB8B9BF,
+                                                        ),
+                                                        width: 2,
+                                                      ),
+                                                      borderRadius:
+                                                          BorderRadius.all(
+                                                            Radius.circular(24),
+                                                          ),
+                                                    ),
+                                                focusedBorder:
+                                                    const OutlineInputBorder(
+                                                      borderSide: BorderSide(
+                                                        color: Color(
+                                                          0xFF635BFF,
+                                                        ),
+                                                        width: 2,
+                                                      ),
+                                                      borderRadius:
+                                                          BorderRadius.all(
+                                                            Radius.circular(24),
+                                                          ),
+                                                    ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  _CommentInputAction(
+                                    key: const Key(
+                                      'video-comment-emoji-button',
+                                    ),
+                                    tooltip: '表情',
+                                    icon: Icons.sentiment_satisfied_alt_rounded,
+                                    iconColor: Colors.white,
+                                    backgroundColor: const Color(0xFF101116),
+                                    onPressed: () => setSheetState(() {
+                                      showEmojiPanel = !showEmojiPanel;
+                                      showTools = false;
+                                      showMentionPanel = false;
+                                    }),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Semantics(
+                                    key: const Key('video-comment-more-button'),
+                                    button: true,
+                                    label: hasDraft
+                                        ? '发送评论'
+                                        : showTools
+                                        ? '收起功能'
+                                        : '更多功能',
+                                    child: IconButton(
+                                      key: const Key('send-video-comment'),
+                                      padding: EdgeInsets.zero,
+                                      constraints:
+                                          const BoxConstraints.tightFor(
+                                            width: 40,
+                                            height: 40,
+                                          ),
+                                      onPressed: () {
+                                        final draftExists =
+                                            commentInput.text
+                                                .trim()
+                                                .isNotEmpty ||
+                                            pendingImage != null;
+                                        if (!draftExists) {
+                                          setSheetState(() {
+                                            showTools = !showTools;
+                                            showEmojiPanel = false;
+                                            showMentionPanel = false;
+                                          });
+                                          return;
+                                        }
+                                        final value = commentInput.text.trim();
+                                        final target = replyTarget;
+                                        final author = widget.session.nickname
+                                            .trim();
+                                        final displayAuthor = author.isEmpty
+                                            ? '我'
+                                            : author;
+                                        commentSequence += 1;
+                                        setSheetState(() {
+                                          if (target == null) {
+                                            videoComments.insert(
+                                              0,
+                                              _VideoComment(
+                                                id: '${video.id}-new-$commentSequence',
+                                                author: displayAuthor,
+                                                content: value,
+                                                time: '刚刚',
+                                                avatarColor: const Color(
+                                                  0xFF6A5CFF,
+                                                ),
+                                                imageAsset: pendingImage,
+                                              ),
+                                            );
+                                          } else {
+                                            target.comment.replies.insert(
+                                              0,
+                                              _VideoCommentReply(
+                                                id: '${target.comment.id}-new-reply-$commentSequence',
+                                                author: displayAuthor,
+                                                content: value,
+                                                time: '刚刚',
+                                                avatarColor: const Color(
+                                                  0xFF6A5CFF,
+                                                ),
+                                                replyTo: target.user,
+                                                imageAsset: pendingImage,
+                                              ),
+                                            );
+                                            expandedComments.add(
+                                              target.comment.id,
+                                            );
+                                          }
+                                          replyTarget = null;
+                                          pendingImage = null;
+                                          showEmojiPanel = false;
+                                          showMentionPanel = false;
+                                          showTools = false;
+                                        });
+                                        commentInput.clear();
+                                        commentFocusNode.unfocus();
+                                      },
+                                      icon: Icon(
+                                        hasDraft
+                                            ? Icons.arrow_upward_rounded
+                                            : Icons.add_rounded,
+                                        color: hasDraft
+                                            ? _videoPurple
+                                            : const Color(0xFF101116),
+                                        size: 24,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (showEmojiPanel)
+                                _CommentEmojiPanel(
+                                  key: const Key('video-comment-emoji-panel'),
+                                  onSelected: (emoji) {
+                                    appendCommentText(emoji);
+                                    setSheetState(() {});
+                                  },
+                                ),
+                              if (showTools)
+                                Column(
+                                  key: const Key('video-comment-tools-panel'),
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Padding(
+                                      padding: const EdgeInsets.only(
+                                        left: 42,
+                                        top: 4,
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          _CommentToolCard(
+                                            key: const Key(
+                                              'video-comment-mention-tile',
+                                            ),
+                                            actionKey: const Key(
+                                              'video-comment-mention-button',
+                                            ),
+                                            label: '提及好友',
+                                            icon: Icons.alternate_email_rounded,
+                                            accent: _videoPurple,
+                                            background: const Color(0xFFF2F0FF),
+                                            onPressed: () => setSheetState(() {
+                                              showMentionPanel =
+                                                  !showMentionPanel;
+                                              showEmojiPanel = false;
+                                            }),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          _CommentToolCard(
+                                            key: const Key(
+                                              'video-comment-image-tile',
+                                            ),
+                                            actionKey: const Key(
+                                              'video-comment-image-button',
+                                            ),
+                                            label: '添加图片',
+                                            icon: Icons
+                                                .add_photo_alternate_rounded,
+                                            accent: _videoCoral,
+                                            background: const Color(0xFFFFF1F3),
+                                            onPressed: () async {
+                                              final selected =
+                                                  await showModalBottomSheet<
+                                                    String
+                                                  >(
+                                                    context: context,
+                                                    showDragHandle: true,
+                                                    builder: (pickerContext) =>
+                                                        _CommentImagePicker(
+                                                          onSelected: (asset) =>
+                                                              Navigator.pop(
+                                                                pickerContext,
+                                                                asset,
+                                                              ),
+                                                        ),
+                                                  );
+                                              if (selected != null) {
+                                                setSheetState(() {
+                                                  pendingImage = selected;
+                                                  showEmojiPanel = false;
+                                                  showMentionPanel = false;
+                                                });
+                                              }
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (showMentionPanel)
+                                      _CommentOptionPanel(
+                                        key: const Key(
+                                          'video-comment-mention-panel',
+                                        ),
+                                        children: [
+                                          for (final user in const [
+                                            'Kevin AI',
+                                            'Luna Design',
+                                            '阿杰',
+                                            '小宇',
+                                          ])
+                                            ActionChip(
+                                              key: Key('video-mention-$user'),
+                                              avatar: ChatAvatar.person(
+                                                name: user,
+                                                radius: 10,
+                                              ),
+                                              label: Text(user),
+                                              onPressed: () {
+                                                appendCommentText('@$user ');
+                                                setSheetState(
+                                                  () =>
+                                                      showMentionPanel = false,
+                                                );
+                                                commentFocusNode.requestFocus();
+                                              },
+                                            ),
+                                        ],
+                                      ),
                                   ],
                                 ),
-                              ),
-                            if (pendingImage != null) const SizedBox(height: 7),
-                            if (showMentionPanel)
-                              _CommentOptionPanel(
-                                key: const Key('video-comment-mention-panel'),
-                                children: [
-                                  for (final user in const [
-                                    'Kevin AI',
-                                    'Luna Design',
-                                    '阿杰',
-                                    '小宇',
-                                  ])
-                                    ActionChip(
-                                      key: Key('video-mention-$user'),
-                                      avatar: ChatAvatar.person(
-                                        name: user,
-                                        radius: 10,
-                                      ),
-                                      label: Text(user),
-                                      onPressed: () {
-                                        appendCommentText('@$user ');
-                                        setSheetState(
-                                          () => showMentionPanel = false,
-                                        );
-                                        commentFocusNode.requestFocus();
-                                      },
-                                    ),
-                                ],
-                              ),
-                            if (showEmojiPanel)
-                              _CommentOptionPanel(
-                                key: const Key('video-comment-emoji-panel'),
-                                children: [
-                                  for (final emoji in const [
-                                    '😀',
-                                    '😍',
-                                    '👍',
-                                    '🔥',
-                                    '🎉',
-                                    '😂',
-                                    '💡',
-                                    '❤️',
-                                  ])
-                                    IconButton(
-                                      key: Key('video-comment-emoji-$emoji'),
-                                      onPressed: () {
-                                        appendCommentText(emoji);
-                                        setSheetState(() {});
-                                      },
-                                      icon: Text(
-                                        emoji,
-                                        style: const TextStyle(fontSize: 23),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                ChatAvatar.person(
-                                  key: const Key('video-comment-my-avatar'),
-                                  name: widget.session.nickname,
-                                  radius: 17,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Container(
-                                    key: const Key('video-comment-input-shell'),
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(22),
-                                    ),
-                                    child: Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.end,
-                                      children: [
-                                        Expanded(
-                                          child: TextField(
-                                            key: const Key(
-                                              'video-comment-input',
-                                            ),
-                                            controller: commentInput,
-                                            focusNode: commentFocusNode,
-                                            minLines: 1,
-                                            maxLines: 3,
-                                            textInputAction:
-                                                TextInputAction.newline,
-                                            onChanged: (_) =>
-                                                setSheetState(() {}),
-                                            decoration: const InputDecoration(
-                                              hintText: '礼貌评论，开心大家！',
-                                              hintStyle: TextStyle(
-                                                color: Color(0xFF9A9CA5),
-                                                fontSize: 13,
-                                              ),
-                                              isDense: true,
-                                              contentPadding:
-                                                  EdgeInsets.fromLTRB(
-                                                    13,
-                                                    11,
-                                                    4,
-                                                    11,
-                                                  ),
-                                              border: InputBorder.none,
-                                            ),
-                                          ),
-                                        ),
-                                        _CommentInputAction(
-                                          key: const Key(
-                                            'video-comment-mention-button',
-                                          ),
-                                          tooltip: '@好友',
-                                          icon: Icons.alternate_email_rounded,
-                                          onPressed: () => setSheetState(() {
-                                            showMentionPanel =
-                                                !showMentionPanel;
-                                            showEmojiPanel = false;
-                                          }),
-                                        ),
-                                        _CommentInputAction(
-                                          key: const Key(
-                                            'video-comment-emoji-button',
-                                          ),
-                                          tooltip: '表情',
-                                          icon: Icons
-                                              .sentiment_satisfied_alt_rounded,
-                                          onPressed: () => setSheetState(() {
-                                            showEmojiPanel = !showEmojiPanel;
-                                            showMentionPanel = false;
-                                          }),
-                                        ),
-                                        _CommentInputAction(
-                                          key: const Key(
-                                            'video-comment-image-button',
-                                          ),
-                                          tooltip: '图片',
-                                          icon: Icons.image_outlined,
-                                          onPressed: () async {
-                                            final selected =
-                                                await showModalBottomSheet<
-                                                  String
-                                                >(
-                                                  context: context,
-                                                  showDragHandle: true,
-                                                  builder: (pickerContext) =>
-                                                      _CommentImagePicker(
-                                                        onSelected: (asset) =>
-                                                            Navigator.pop(
-                                                              pickerContext,
-                                                              asset,
-                                                            ),
-                                                      ),
-                                                );
-                                            if (selected != null) {
-                                              setSheetState(() {
-                                                pendingImage = selected;
-                                                showEmojiPanel = false;
-                                                showMentionPanel = false;
-                                              });
-                                            }
-                                          },
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                IconButton.filled(
-                                  key: const Key('send-video-comment'),
-                                  tooltip: '发送',
-                                  onPressed: () {
-                                    final value = commentInput.text.trim();
-                                    if (value.isEmpty && pendingImage == null) {
-                                      return;
-                                    }
-                                    final target = replyTarget;
-                                    final author = widget.session.nickname
-                                        .trim();
-                                    final displayAuthor = author.isEmpty
-                                        ? '我'
-                                        : author;
-                                    commentSequence += 1;
-                                    if (target == null) {
-                                      videoComments.insert(
-                                        0,
-                                        _VideoComment(
-                                          id: '${video.id}-new-$commentSequence',
-                                          author: displayAuthor,
-                                          content: value,
-                                          time: '刚刚',
-                                          avatarColor: const Color(0xFF6A5CFF),
-                                          imageAsset: pendingImage,
-                                        ),
-                                      );
-                                    } else {
-                                      target.comment.replies.insert(
-                                        0,
-                                        _VideoCommentReply(
-                                          id: '${target.comment.id}-new-reply-$commentSequence',
-                                          author: displayAuthor,
-                                          content: value,
-                                          time: '刚刚',
-                                          avatarColor: const Color(0xFF6A5CFF),
-                                          replyTo: target.user,
-                                          imageAsset: pendingImage,
-                                        ),
-                                      );
-                                      expandedComments.add(target.comment.id);
-                                    }
-                                    setState(() {});
-                                    setSheetState(() {
-                                      replyTarget = null;
-                                      pendingImage = null;
-                                      showEmojiPanel = false;
-                                      showMentionPanel = false;
-                                    });
-                                    commentInput.clear();
-                                    commentFocusNode.unfocus();
-                                  },
-                                  style: IconButton.styleFrom(
-                                    backgroundColor:
-                                        commentInput.text.trim().isNotEmpty ||
-                                            pendingImage != null
-                                        ? const Color(0xFFFE2C55)
-                                        : const Color(0xFFE6E6E9),
-                                    foregroundColor: Colors.white,
-                                    minimumSize: const Size(38, 38),
-                                  ),
-                                  icon: const Icon(
-                                    Icons.arrow_upward_rounded,
-                                    size: 20,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -1196,6 +1396,36 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
     );
   }
 
+  Widget buildVideoProgress(
+    _VideoFeedItem video,
+    VideoPlayerController? controller,
+  ) {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: controller?.value.isInitialized == true
+          ? VideoProgressIndicator(
+              controller!,
+              key: Key('video-progress-${video.id}'),
+              allowScrubbing: true,
+              padding: EdgeInsets.zero,
+              colors: const VideoProgressColors(
+                playedColor: _videoPurple,
+                bufferedColor: Colors.white38,
+                backgroundColor: Colors.white24,
+              ),
+            )
+          : LinearProgressIndicator(
+              key: Key('video-progress-${video.id}'),
+              value: 0,
+              minHeight: 2,
+              color: _videoPurple,
+              backgroundColor: Colors.white24,
+            ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bottomOverlayInset =
@@ -1204,153 +1434,135 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          PageView.builder(
-            key: const Key('vertical-video-feed'),
-            controller: pageController,
-            scrollDirection: Axis.vertical,
-            allowImplicitScrolling: true,
-            scrollCacheExtent: const ScrollCacheExtent.viewport(1),
-            physics: const PageScrollPhysics(
-              parent: BouncingScrollPhysics(
-                parent: AlwaysScrollableScrollPhysics(),
-              ),
-            ),
-            itemCount: videoItems.length,
-            onPageChanged: (index) {
-              setState(() {
-                currentIndex = index;
-                paused = false;
-                showLikeBurst = false;
-              });
-              prepareAround(index);
-              if (remoteFeedReady && index >= videoItems.length - 3) {
-                unawaited(loadMoreVideos());
-              }
-            },
-            itemBuilder: (context, index) {
-              final video = videoItems[index];
-              final liked = likedVideos.contains(video.id);
-              final followed = followedCreators.contains(video.author);
-              final joined = joinedGroups.contains(video.groupName);
-              return Stack(
-                fit: StackFit.expand,
-                children: [
-                  GestureDetector(
-                    key: Key('video-page-${video.id}'),
-                    behavior: HitTestBehavior.opaque,
-                    onTap: togglePlayback,
-                    onDoubleTap: () => toggleLike(video, showBurst: true),
-                    child: IgnorePointer(child: buildVideoLayer(index, video)),
-                  ),
-                  if (paused)
-                    IgnorePointer(
-                      child: Center(
-                        child: Container(
-                          width: 74,
-                          height: 74,
-                          decoration: BoxDecoration(
-                            color: _videoInk.withValues(alpha: 0.72),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white24),
+          NotificationListener<ScrollNotification>(
+            onNotification: handleScrollNotification,
+            child: PageView.builder(
+              key: const Key('vertical-video-feed'),
+              controller: pageController,
+              scrollDirection: Axis.vertical,
+              pageSnapping: false,
+              allowImplicitScrolling: true,
+              scrollCacheExtent: const ScrollCacheExtent.viewport(1),
+              physics: pagePhysics,
+              itemCount: videoItems.length,
+              onPageChanged: (index) {
+                setState(() {
+                  currentIndex = index;
+                  paused = false;
+                  showLikeBurst = false;
+                });
+                prepareAround(index);
+                if (remoteFeedReady && index >= videoItems.length - 3) {
+                  unawaited(loadMoreVideos());
+                }
+              },
+              itemBuilder: (context, index) {
+                final video = videoItems[index];
+                final liked = likedVideos.contains(video.id);
+                final followed = followedCreators.contains(video.author);
+                final joined = joinedGroups.contains(video.groupName);
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    GestureDetector(
+                      key: Key('video-page-${video.id}'),
+                      behavior: HitTestBehavior.opaque,
+                      onTap: togglePlayback,
+                      onDoubleTap: () => toggleLike(video, showBurst: true),
+                      child: IgnorePointer(
+                        child: buildVideoLayer(index, video),
+                      ),
+                    ),
+                    if (index == currentIndex)
+                      buildVideoProgress(video, videoControllers[index]),
+                    if (paused)
+                      IgnorePointer(
+                        child: Center(
+                          child: Container(
+                            width: 74,
+                            height: 74,
+                            decoration: BoxDecoration(
+                              color: _videoInk.withValues(alpha: 0.72),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white24),
+                            ),
+                            child: const Icon(
+                              Icons.play_arrow_rounded,
+                              key: Key('video-paused-indicator'),
+                              size: 48,
+                              color: Colors.white,
+                            ),
                           ),
+                        ),
+                      ),
+                    Center(
+                      child: IgnorePointer(
+                        child: AnimatedOpacity(
+                          key: const Key('video-like-burst'),
+                          opacity: showLikeBurst && index == currentIndex
+                              ? 1
+                              : 0,
+                          duration: const Duration(milliseconds: 120),
                           child: const Icon(
-                            Icons.play_arrow_rounded,
-                            key: Key('video-paused-indicator'),
-                            size: 48,
-                            color: Colors.white,
+                            Icons.favorite_rounded,
+                            color: _videoCoral,
+                            size: 105,
+                            shadows: [
+                              Shadow(color: Colors.black38, blurRadius: 18),
+                            ],
                           ),
                         ),
                       ),
                     ),
-                  Center(
-                    child: IgnorePointer(
-                      child: AnimatedOpacity(
-                        key: const Key('video-like-burst'),
-                        opacity: showLikeBurst && index == currentIndex ? 1 : 0,
-                        duration: const Duration(milliseconds: 120),
-                        child: const Icon(
-                          Icons.favorite_rounded,
-                          color: _videoCoral,
-                          size: 105,
-                          shadows: [
-                            Shadow(color: Colors.black38, blurRadius: 18),
-                          ],
+                    Positioned(
+                      left: 14,
+                      right:
+                          _videoActionRailWidth +
+                          _videoActionRailRightInset +
+                          _videoContentActionGap,
+                      bottom: bottomOverlayInset,
+                      child: _VideoDescription(
+                        video: video,
+                        joined: joined,
+                        onJoin: () => openGroup(video),
+                      ),
+                    ),
+                    Positioned(
+                      right: _videoActionRailRightInset,
+                      bottom: bottomOverlayInset,
+                      child: _VideoActionRail(
+                        video: video,
+                        liked: liked,
+                        followed: followed,
+                        commentCount: comments[video.id]?.length ?? 15,
+                        likeCount: video.likes + (liked ? 1 : 0),
+                        formatCount: compactCount,
+                        onFollow: () => setState(() {
+                          if (!followedCreators.add(video.author)) {
+                            followedCreators.remove(video.author);
+                          }
+                        }),
+                        onLike: () => toggleLike(video),
+                        onComment: () => openComments(video),
+                        onShare: () => openShare(video),
+                      ),
+                    ),
+                    if (index == currentIndex && remoteFeedReady)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: bottomOverlayInset + 8,
+                        child: _VideoLoadMoreState(
+                          loading: loadingMore,
+                          failed: loadMoreFailed,
+                          hasMore: remotePagination.hasMore,
+                          onRetry: loadMoreVideos,
                         ),
                       ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 14,
-                    right:
-                        _videoActionRailWidth +
-                        _videoActionRailRightInset +
-                        _videoContentActionGap,
-                    bottom: bottomOverlayInset,
-                    child: _VideoDescription(
-                      video: video,
-                      joined: joined,
-                      onJoin: () => openGroup(video),
-                    ),
-                  ),
-                  Positioned(
-                    right: _videoActionRailRightInset,
-                    bottom: bottomOverlayInset,
-                    child: _VideoActionRail(
-                      video: video,
-                      liked: liked,
-                      followed: followed,
-                      commentCount: comments[video.id]?.length ?? 15,
-                      likeCount: video.likes + (liked ? 1 : 0),
-                      formatCount: compactCount,
-                      onFollow: () => setState(() {
-                        if (!followedCreators.add(video.author)) {
-                          followedCreators.remove(video.author);
-                        }
-                      }),
-                      onLike: () => toggleLike(video),
-                      onComment: () => openComments(video),
-                      onShare: () => openShare(video),
-                    ),
-                  ),
-                  if (index == currentIndex && remoteFeedReady)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: bottomOverlayInset + 8,
-                      child: _VideoLoadMoreState(
-                        loading: loadingMore,
-                        failed: loadMoreFailed,
-                        hasMore: remotePagination.hasMore,
-                        onRetry: loadMoreVideos,
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: currentController?.value.isInitialized == true
-                ? VideoProgressIndicator(
-                    currentController!,
-                    key: const Key('video-progress'),
-                    allowScrubbing: true,
-                    padding: EdgeInsets.zero,
-                    colors: const VideoProgressColors(
-                      playedColor: _videoPurple,
-                      bufferedColor: Colors.white38,
-                      backgroundColor: Colors.white24,
-                    ),
-                  )
-                : const LinearProgressIndicator(
-                    key: Key('video-progress'),
-                    value: 0,
-                    minHeight: 2,
-                    color: _videoPurple,
-                    backgroundColor: Colors.white24,
-                  ),
+                  ],
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -1709,6 +1921,41 @@ class _CommentImage extends StatelessWidget {
   );
 }
 
+class _CommentEmojiPanel extends StatelessWidget {
+  const _CommentEmojiPanel({super.key, required this.onSelected});
+
+  final ValueChanged<String> onSelected;
+
+  static const emojis = ['😀', '😍', '👍', '🔥', '🎉', '😂', '💡', '❤️'];
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    margin: const EdgeInsets.only(bottom: 4),
+    padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+    color: Colors.white,
+    child: Row(
+      children: [
+        for (final emoji in emojis)
+          Expanded(
+            child: IconButton(
+              key: Key('video-comment-emoji-$emoji'),
+              tooltip: emoji,
+              onPressed: () => onSelected(emoji),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 44, height: 44),
+              icon: CircleAvatar(
+                radius: 21,
+                backgroundColor: const Color(0xFF101116),
+                child: Text(emoji, style: const TextStyle(fontSize: 22)),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
 class _CommentOptionPanel extends StatelessWidget {
   const _CommentOptionPanel({super.key, required this.children});
 
@@ -1727,26 +1974,98 @@ class _CommentOptionPanel extends StatelessWidget {
   );
 }
 
+class _CommentToolCard extends StatelessWidget {
+  const _CommentToolCard({
+    super.key,
+    required this.actionKey,
+    required this.label,
+    required this.icon,
+    required this.accent,
+    required this.background,
+    required this.onPressed,
+  });
+
+  final Key actionKey;
+  final String label;
+  final IconData icon;
+  final Color accent;
+  final Color background;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: label,
+    child: Material(
+      color: background,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        key: actionKey,
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.14),
+                  shape: BoxShape.circle,
+                ),
+                child: SizedBox(
+                  width: 32,
+                  height: 32,
+                  child: Icon(icon, size: 19, color: accent),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Color(0xFF292A38),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class _CommentInputAction extends StatelessWidget {
   const _CommentInputAction({
     super.key,
     required this.tooltip,
     required this.icon,
     required this.onPressed,
+    this.iconColor,
+    this.backgroundColor,
   });
 
   final String tooltip;
   final IconData icon;
   final VoidCallback onPressed;
+  final Color? iconColor;
+  final Color? backgroundColor;
 
   @override
   Widget build(BuildContext context) => IconButton(
     tooltip: tooltip,
     onPressed: onPressed,
     padding: EdgeInsets.zero,
-    constraints: const BoxConstraints.tightFor(width: 31, height: 40),
+    constraints: const BoxConstraints.tightFor(width: 40, height: 40),
     visualDensity: VisualDensity.compact,
-    icon: Icon(icon, size: 20, color: const Color(0xFF555760)),
+    style: backgroundColor == null
+        ? null
+        : IconButton.styleFrom(
+            backgroundColor: backgroundColor,
+            foregroundColor: iconColor,
+          ),
+    icon: Icon(icon, size: 20, color: iconColor ?? const Color(0xFF555760)),
   );
 }
 

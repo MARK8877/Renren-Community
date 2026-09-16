@@ -12,6 +12,27 @@ class AuthResult {
   final String token, nickname;
 }
 
+class UserProfile {
+  const UserProfile({
+    required this.id,
+    required this.nickname,
+    required this.bio,
+    required this.avatarUrl,
+    required this.role,
+  });
+
+  final int id;
+  final String nickname, bio, avatarUrl, role;
+
+  factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
+    id: (json['id'] as num?)?.toInt() ?? 0,
+    nickname: json['nickname'] as String? ?? '',
+    bio: json['bio'] as String? ?? '',
+    avatarUrl: json['avatarUrl'] as String? ?? '',
+    role: json['role'] as String? ?? '',
+  );
+}
+
 class AuthApi {
   AuthApi({http.Client? client, String? baseUrl})
     : _client = client ?? http.Client(),
@@ -36,6 +57,13 @@ class AuthApi {
         'password': password,
         'nickname': nickname,
       });
+  Future<UserProfile> getProfile(String token) => _profileRequest('GET', token);
+  Future<UserProfile> updateProfile(
+    String token, {
+    required String nickname,
+    required String bio,
+  }) => _profileRequest('PATCH', token, {'nickname': nickname, 'bio': bio});
+
   Future<AuthResult> _submit(String path, Map<String, String> body) async {
     try {
       final res = await _client.post(
@@ -53,6 +81,32 @@ class AuthApi {
         data['accessToken'] as String,
         user['nickname'] as String,
       );
+    } on AuthException {
+      rethrow;
+    } catch (_) {
+      throw const AuthException('无法连接服务器，请检查网络后重试');
+    }
+  }
+
+  Future<UserProfile> _profileRequest(
+    String method,
+    String token, [
+    Map<String, String>? body,
+  ]) async {
+    try {
+      final request = http.Request(method, Uri.parse('$baseUrl/api/v1/auth/me'))
+        ..headers.addAll({
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        });
+      if (body != null) request.body = jsonEncode(body);
+      final streamed = await _client.send(request);
+      final response = await http.Response.fromStream(streamed);
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw AuthException(json['message'] as String? ?? '请求失败');
+      }
+      return UserProfile.fromJson(json['data'] as Map<String, dynamic>);
     } on AuthException {
       rethrow;
     } catch (_) {

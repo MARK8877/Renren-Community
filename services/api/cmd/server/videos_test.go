@@ -20,3 +20,11 @@ func TestParseVideoQueryClampsPageSize(t *testing.T) {
 		t.Fatalf("unexpected query: %q %d %d", platform, page, pageSize)
 	}
 }
+
+func TestParseVideoQueryMapsTikTokToStoredPlatform(t *testing.T) {
+	r := httptest.NewRequest("GET", "/api/v1/videos?platform=tiktok", nil)
+	platform, _, _ := parseVideoQuery(r)
+	if platform != "douyin" {
+		t.Fatalf("platform = %q, want douyin", platform)
+	}
+}

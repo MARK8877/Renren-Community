@@ -43,6 +43,34 @@ class AuthSession extends ChangeNotifier {
       _save(await api.login(id, password));
   Future<void> register(String id, String password, String nickname) async =>
       _save(await api.register(id, password, nickname));
+  Future<UserProfile> getProfile() async {
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      throw const AuthException('请先登录');
+    }
+    return api.getProfile(token);
+  }
+
+  Future<UserProfile> updateProfile({
+    required String nickname,
+    required String bio,
+  }) async {
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      throw const AuthException('请先登录');
+    }
+    final profile = await api.updateProfile(
+      token,
+      nickname: nickname,
+      bio: bio,
+    );
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString(nicknameKey, profile.nickname);
+    _nickname = profile.nickname;
+    notifyListeners();
+    return profile;
+  }
+
   Future<void> _save(AuthResult r) async {
     final preferences = await SharedPreferences.getInstance();
     await preferences.setString(accessTokenKey, r.token);

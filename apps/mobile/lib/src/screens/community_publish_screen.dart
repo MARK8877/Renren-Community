@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../auth/auth_api.dart';
 import '../auth/auth_session.dart';
 import '../chat/chat_api.dart';
 import '../community/community_post.dart';
@@ -22,6 +23,30 @@ class _CommunityPublishScreenState extends State<CommunityPublishScreen> {
   bool createGroup = false;
   bool submitting = false;
   String? errorMessage;
+  UserProfile? profile;
+
+  @override
+  void initState() {
+    super.initState();
+    loadProfile();
+  }
+
+  Future<void> loadProfile() async {
+    if (!widget.session.signedIn) return;
+    try {
+      final value = await widget.session.getProfile();
+      if (mounted) setState(() => profile = value);
+    } on AuthException {
+      // 接口不可用时仍可使用当前登录昵称发布。
+    }
+  }
+
+  String get authorName => profile?.nickname ?? widget.session.nickname;
+
+  String? get authorAvatarUrl {
+    final value = profile?.avatarUrl.trim();
+    return value == null || value.isEmpty ? null : value;
+  }
 
   @override
   void dispose() {
@@ -74,7 +99,7 @@ class _CommunityPublishScreenState extends State<CommunityPublishScreen> {
       context,
       CommunityPost(
         id: DateTime.now().microsecondsSinceEpoch.toString(),
-        author: widget.session.nickname,
+        author: authorName,
         content: content,
         tags: selectedTopics.toList(),
         createdAt: DateTime.now(),
@@ -118,15 +143,22 @@ class _CommunityPublishScreenState extends State<CommunityPublishScreen> {
               Row(
                 children: [
                   CircleAvatar(
+                    key: const Key('publish-author-avatar'),
                     backgroundColor: const Color(0xFFE8E5FF),
-                    child: Text(widget.session.nickname.characters.first),
+                    foregroundImage: authorAvatarUrl == null
+                        ? null
+                        : NetworkImage(authorAvatarUrl!),
+                    onForegroundImageError: authorAvatarUrl == null
+                        ? null
+                        : (_, _) {},
+                    child: Text(authorName.characters.first),
                   ),
                   const SizedBox(width: 10),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        widget.session.nickname,
+                        authorName,
                         style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                       const Text(

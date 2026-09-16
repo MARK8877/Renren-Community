@@ -81,14 +81,14 @@ void main() {
     await pumpVideoFeed(tester);
 
     expect(find.byKey(const Key('vertical-video-feed')), findsOneWidget);
+    expect(find.byKey(const Key('video-progress-ai-workflow')), findsOneWidget);
     final feed = tester.widget<PageView>(
       find.byKey(const Key('vertical-video-feed')),
     );
     expect(feed.childrenDelegate.estimatedChildCount, 10);
     expect(feed.allowImplicitScrolling, isTrue);
     expect(feed.scrollCacheExtent.value, 1);
-    expect(feed.physics, isA<PageScrollPhysics>());
-    expect(feed.physics?.parent, isA<BouncingScrollPhysics>());
+    expect(feed.physics, isNot(isA<NeverScrollableScrollPhysics>()));
     expect(find.text('@Kevin AI'), findsOneWidget);
     expect(
       find.byKey(const Key('join-video-group-ai-workflow')),
@@ -123,19 +123,138 @@ void main() {
       find.byKey(const Key('vertical-video-feed')),
       const Offset(0, -700),
     );
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
     expect(find.text('@Luna Design'), findsOneWidget);
+    expect(
+      find.byKey(const Key('video-progress-design-workshop')),
+      findsOneWidget,
+    );
 
     await tester.drag(
       find.byKey(const Key('vertical-video-feed')),
       const Offset(0, -700),
     );
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
     expect(find.text('@足球星球'), findsOneWidget);
     expect(
       find.byKey(const Key('join-video-group-football-night')),
       findsNothing,
     );
+  });
+
+  testWidgets('单次快速滑动最多切换一页', (tester) async {
+    await pumpVideoFeed(tester);
+
+    await tester.fling(
+      find.byKey(const Key('vertical-video-feed')),
+      const Offset(0, -1600),
+      5000,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('@Luna Design'), findsOneWidget);
+    expect(find.text('@足球星球'), findsNothing);
+  });
+
+  testWidgets('视频分页不叠加上一段惯性速度', (tester) async {
+    await pumpVideoFeed(tester);
+
+    final feed = tester.widget<PageView>(
+      find.byKey(const Key('vertical-video-feed')),
+    );
+    expect(feed.physics!.carriedMomentum(5000), 0);
+  });
+
+  testWidgets('超大距离和速度连续滑动仍逐页切换', (tester) async {
+    await pumpVideoFeed(tester);
+
+    final feedFinder = find.byKey(const Key('vertical-video-feed'));
+    final feed = tester.widget<PageView>(feedFinder);
+    final controller = feed.controller!;
+
+    for (var expectedPage = 1; expectedPage <= 2; expectedPage += 1) {
+      await tester.fling(feedFinder, const Offset(0, -1600), 50000);
+      await tester.pumpAndSettle();
+      expect(controller.page!.round(), expectedPage);
+    }
+  });
+
+  testWidgets('高力度释放的回弹动画不越过相邻页', (tester) async {
+    await pumpVideoFeed(tester);
+
+    final feedFinder = find.byKey(const Key('vertical-video-feed'));
+    final feed = tester.widget<PageView>(feedFinder);
+    final controller = feed.controller!;
+
+    await tester.fling(feedFinder, const Offset(0, -1600), 500000);
+    for (var frame = 0; frame < 40; frame += 1) {
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(controller.page, lessThanOrEqualTo(1.01));
+    }
+  });
+
+  testWidgets('惯性未结束时再次滑动也只推进一页', (tester) async {
+    await pumpVideoFeed(tester);
+
+    final feedFinder = find.byKey(const Key('vertical-video-feed'));
+    final feed = tester.widget<PageView>(feedFinder);
+    final controller = feed.controller!;
+
+    await tester.fling(feedFinder, const Offset(0, -1600), 50000);
+    await tester.pump(const Duration(milliseconds: 40));
+    await tester.fling(feedFinder, const Offset(0, -1600), 50000);
+    var maxPage = 0.0;
+    for (var frame = 0; frame < 60; frame += 1) {
+      await tester.pump(const Duration(milliseconds: 16));
+      final page = controller.page ?? 0;
+      if (page > maxPage) maxPage = page;
+    }
+
+    expect(maxPage, lessThanOrEqualTo(2.01));
+    expect(controller.page!.round(), 2);
+  });
+
+  testWidgets('单个超大拖动事件也不会越过相邻页', (tester) async {
+    await pumpVideoFeed(tester);
+
+    final feedFinder = find.byKey(const Key('vertical-video-feed'));
+    final feed = tester.widget<PageView>(feedFinder);
+    final controller = feed.controller!;
+    final gesture = await tester.startGesture(tester.getCenter(feedFinder));
+    await gesture.moveBy(const Offset(0, -1600));
+    await tester.pump();
+
+    expect(controller.page, lessThanOrEqualTo(1.01));
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('视频页拖动过程中保持跟手', (tester) async {
+    await pumpVideoFeed(tester);
+
+    final feed = tester.widget<PageView>(
+      find.byKey(const Key('vertical-video-feed')),
+    );
+    final controller = feed.controller!;
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byKey(const Key('vertical-video-feed'))),
+    );
+    for (var step = 0; step < 4; step += 1) {
+      await gesture.moveBy(const Offset(0, -55));
+      await tester.pump();
+    }
+
+    expect(controller.page, greaterThan(0.05));
+
+    for (var step = 0; step < 12; step += 1) {
+      await gesture.moveBy(const Offset(0, -100));
+      await tester.pump();
+    }
+    expect(controller.page, lessThanOrEqualTo(1.01));
+
+    await gesture.up();
+    await tester.pumpAndSettle();
   });
 
   testWidgets('视频支持评论和转发操作', (tester) async {
@@ -268,6 +387,18 @@ void main() {
     expect(input.decoration?.hintText, '礼貌评论，开心大家！');
     expect(find.byKey(const Key('video-comment-my-avatar')), findsOneWidget);
 
+    expect(find.byKey(const Key('video-comment-mention-button')), findsNothing);
+    expect(find.byKey(const Key('video-comment-emoji-button')), findsOneWidget);
+    expect(find.byKey(const Key('video-comment-image-button')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('video-comment-more-button')));
+    await tester.pump();
+    expect(
+      find.byKey(const Key('video-comment-mention-button')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('video-comment-image-button')), findsOneWidget);
+
     await tester.tap(find.byKey(const Key('video-comment-mention-button')));
     await tester.pump();
     expect(
@@ -275,12 +406,6 @@ void main() {
       findsOneWidget,
     );
     await tester.tap(find.byKey(const Key('video-mention-Kevin AI')));
-    await tester.pump();
-
-    await tester.tap(find.byKey(const Key('video-comment-emoji-button')));
-    await tester.pump();
-    expect(find.byKey(const Key('video-comment-emoji-panel')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('video-comment-emoji-👍')));
     await tester.pump();
 
     await tester.tap(find.byKey(const Key('video-comment-image-button')));
@@ -293,6 +418,12 @@ void main() {
       findsOneWidget,
     );
 
+    await tester.tap(find.byKey(const Key('video-comment-emoji-button')));
+    await tester.pump();
+    expect(find.byKey(const Key('video-comment-emoji-panel')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('video-comment-emoji-👍')));
+    await tester.pump();
+
     await tester.tap(find.byKey(const Key('send-video-comment')));
     await tester.pump();
     expect(find.textContaining('@Kevin AI'), findsWidgets);
@@ -302,7 +433,7 @@ void main() {
     );
   });
 
-  testWidgets('视频评论底部输入区不设置背景色', (tester) async {
+  testWidgets('视频评论输入栏复用参考草图结构', (tester) async {
     await pumpVideoFeed(tester);
 
     await tester.tap(find.byKey(const Key('video-comment-ai-workflow')));
@@ -314,7 +445,107 @@ void main() {
     final decoration = inputShell.decoration as BoxDecoration?;
     expect(decoration?.color, isNull);
     expect(inputShell.color, isNull);
-    expect(decoration?.borderRadius, BorderRadius.circular(22));
+    expect(decoration?.borderRadius, BorderRadius.circular(24));
+
+    expect(find.byKey(const Key('video-comment-my-avatar')), findsOneWidget);
+    expect(find.byKey(const Key('video-comment-emoji-button')), findsOneWidget);
+    expect(find.byKey(const Key('video-comment-more-button')), findsOneWidget);
+    expect(find.byKey(const Key('video-comment-mention-button')), findsNothing);
+    expect(find.byKey(const Key('video-comment-image-button')), findsNothing);
+  });
+
+  testWidgets('视频评论输入框使用参考草图线框样式', (tester) async {
+    await pumpVideoFeed(tester);
+
+    await tester.tap(find.byKey(const Key('video-comment-ai-workflow')));
+    await tester.pumpAndSettle();
+
+    final input = tester.widget<TextField>(
+      find.byKey(const Key('video-comment-input')),
+    );
+    expect(input.decoration?.filled, isFalse);
+    expect(input.decoration?.fillColor, isNull);
+    expect(input.maxLines, 1);
+    expect(input.decoration?.border, isA<OutlineInputBorder>());
+    final border = input.decoration!.border! as OutlineInputBorder;
+    expect(
+      border.borderSide,
+      const BorderSide(color: Color(0xFFB8B9BF), width: 2),
+    );
+    expect(border.borderRadius, BorderRadius.circular(24));
+
+    final shellSize = tester.getSize(
+      find.byKey(const Key('video-comment-input-shell')),
+    );
+    expect(shellSize.height, greaterThanOrEqualTo(40));
+  });
+
+  testWidgets('评论面板从输入框底部展开并抬升输入栏', (tester) async {
+    await pumpVideoFeed(tester);
+
+    await tester.tap(find.byKey(const Key('video-comment-ai-workflow')));
+    await tester.pumpAndSettle();
+    final inputShell = find.byKey(const Key('video-comment-input-shell'));
+    final initialTop = tester.getTopLeft(inputShell).dy;
+
+    await tester.tap(find.byKey(const Key('video-comment-emoji-button')));
+    await tester.pumpAndSettle();
+    final emojiPanel = find.byKey(const Key('video-comment-emoji-panel'));
+    expect(emojiPanel, findsOneWidget);
+    expect(
+      tester.getRect(emojiPanel).top,
+      greaterThanOrEqualTo(tester.getRect(inputShell).bottom - 1),
+    );
+    expect(tester.getTopLeft(inputShell).dy, lessThan(initialTop - 1));
+
+    await tester.tap(find.byKey(const Key('video-comment-emoji-button')));
+    await tester.pumpAndSettle();
+    expect(emojiPanel, findsNothing);
+    expect(tester.getTopLeft(inputShell).dy, closeTo(initialTop, 1));
+
+    await tester.tap(find.byKey(const Key('video-comment-more-button')));
+    await tester.pumpAndSettle();
+    final toolsPanel = find.byKey(const Key('video-comment-tools-panel'));
+    expect(toolsPanel, findsOneWidget);
+    expect(
+      tester.getRect(toolsPanel).top,
+      greaterThanOrEqualTo(tester.getRect(inputShell).bottom - 1),
+    );
+    expect(tester.getTopLeft(inputShell).dy, lessThan(initialTop - 1));
+
+    await tester.tap(find.byKey(const Key('video-comment-more-button')));
+    await tester.pumpAndSettle();
+    expect(toolsPanel, findsNothing);
+    expect(tester.getTopLeft(inputShell).dy, closeTo(initialTop, 1));
+  });
+
+  testWidgets('加号工具使用带标签的创作工具卡片', (tester) async {
+    await pumpVideoFeed(tester);
+
+    await tester.tap(find.byKey(const Key('video-comment-ai-workflow')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('video-comment-more-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('video-comment-tools-panel')), findsOneWidget);
+    expect(find.byKey(const Key('video-comment-mention-tile')), findsOneWidget);
+    expect(find.byKey(const Key('video-comment-image-tile')), findsOneWidget);
+    expect(find.text('提及好友'), findsOneWidget);
+    expect(find.text('添加图片'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('video-comment-mention-tile')),
+        matching: find.byIcon(Icons.alternate_email_rounded),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('video-comment-image-tile')),
+        matching: find.byIcon(Icons.add_photo_alternate_rounded),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('右侧操作栏使用抖音式实心图标和点赞动效', (tester) async {
@@ -403,7 +634,7 @@ void main() {
     expect(find.text('P1-0'), findsOneWidget);
     for (var index = 0; index < 26; index += 1) {
       await tester.drag(feed, const Offset(0, -700));
-      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
     }
 
     expect(client.requestedPages, contains(2));

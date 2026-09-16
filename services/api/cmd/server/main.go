@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"creatorhub/api/internal/account"
 	"creatorhub/api/internal/auth"
@@ -20,6 +21,7 @@ import (
 	"creatorhub/api/internal/config"
 	"creatorhub/api/internal/database"
 	"creatorhub/api/internal/friend"
+	"creatorhub/api/internal/homefeed"
 	"creatorhub/api/internal/scraper"
 	"creatorhub/api/internal/video"
 	"golang.org/x/crypto/bcrypt"
@@ -36,6 +38,7 @@ type userData struct {
 	Phone     string `json:"phone,omitempty"`
 	Nickname  string `json:"nickname"`
 	AvatarURL string `json:"avatarUrl,omitempty"`
+	Bio       string `json:"bio"`
 	Role      string `json:"role"`
 }
 type authData struct {
@@ -53,11 +56,16 @@ type schedulerView interface {
 	NextRunAt() time.Time
 }
 
+type homePostStore interface {
+	List(context.Context, int, int) ([]homefeed.Post, error)
+}
+
 type server struct {
 	accounts         *account.Repository
 	chats            *chat.Repository
 	friends          *friend.Repository
 	videos           *video.Repository
+	homePosts        homePostStore
 	tokens           *auth.TokenManager
 	scraper          scraperController
 	scraperScheduler schedulerView
@@ -85,6 +93,7 @@ func main() {
 		chats:            chat.NewRepository(db),
 		friends:          friend.NewRepository(db),
 		videos:           video.NewRepository(db),
+		homePosts:        homefeed.NewRepository(db),
 		tokens:           auth.NewTokenManager(cfg.Auth.TokenSecret, cfg.Auth.TokenTTL),
 		scraper:          scraperService,
 		scraperScheduler: scheduler,
@@ -93,12 +102,14 @@ func main() {
 	registerDocsRoutes(mux)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, response{Code: 0, Message: "ok"}) })
 	mux.HandleFunc("GET /api/v1/videos", api.requireAuth(api.listVideos))
+	mux.HandleFunc("GET /api/v1/home/posts", api.requireAuth(api.listHomePosts))
 	mux.HandleFunc("POST /api/v1/admin/scraper/run", api.requireAdmin(api.runScraper))
 	mux.HandleFunc("GET /api/v1/admin/scraper/status", api.requireAdmin(api.scraperStatus))
 	mux.HandleFunc("POST /api/v1/auth/register", api.register)
 	mux.HandleFunc("POST /api/v1/auth/login", api.login(false))
 	mux.HandleFunc("POST /api/v1/admin/login", api.login(true))
 	mux.HandleFunc("GET /api/v1/auth/me", api.requireAuth(api.me))
+	mux.HandleFunc("PATCH /api/v1/auth/me", api.requireAuth(api.updateMe))
 	mux.HandleFunc("GET /api/v1/conversations", api.requireAuth(api.listConversations))
 	mux.HandleFunc("POST /api/v1/conversations/read-all", api.requireAuth(api.markAllConversationsRead))
 	mux.HandleFunc("POST /api/v1/conversations/groups", api.requireAuth(api.createGroup))
@@ -229,11 +240,51 @@ func (s *server) me(w http.ResponseWriter, r *http.Request, claims auth.Claims) 
 	writeJSON(w, 200, response{Code: 0, Message: "ok", Data: publicUser(user)})
 }
 
+func (s *server) updateMe(w http.ResponseWriter, r *http.Request, claims auth.Claims) {
+	var input struct {
+		Nickname string `json:"nickname"`
+		Bio      string `json:"bio"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.Nickname = strings.TrimSpace(input.Nickname)
+	input.Bio = strings.TrimSpace(input.Bio)
+	if input.Nickname == "" || utf8.RuneCountInString(input.Nickname) > 20 || utf8.RuneCountInString(input.Bio) > 60 {
+		writeJSON(w, 400, response{Code: 10400, Message: "昵称为 1 至 20 个字符，个人简介最多 60 个字符"})
+		return
+	}
+	user, err := s.accounts.UpdateProfile(r.Context(), claims.UserID, input.Nickname, input.Bio)
+	if errors.Is(err, account.ErrNotFound) {
+		writeJSON(w, 404, response{Code: 10404, Message: "用户不存在"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, 500, response{Code: 10500, Message: "更新个人资料失败"})
+		return
+	}
+	writeJSON(w, 200, response{Code: 0, Message: "ok", Data: publicUser(user)})
+}
+
 func (s *server) listVideos(w http.ResponseWriter, r *http.Request, _ auth.Claims) {
 	platform, page, pageSize := parseVideoQuery(r)
 	items, err := s.videos.List(r.Context(), platform, page, pageSize)
 	if err != nil {
 		writeJSON(w, 500, response{Code: 10500, Message: "读取视频失败"})
+		return
+	}
+	writeJSON(w, 200, response{Code: 0, Message: "ok", Data: items})
+}
+
+func (s *server) listHomePosts(w http.ResponseWriter, r *http.Request, _ auth.Claims) {
+	if s.homePosts == nil {
+		writeJSON(w, 500, response{Code: 10500, Message: "首页动态服务未初始化"})
+		return
+	}
+	_, page, pageSize := parseVideoQuery(r)
+	items, err := s.homePosts.List(r.Context(), page, pageSize)
+	if err != nil {
+		writeJSON(w, 500, response{Code: 10500, Message: "读取首页动态失败"})
 		return
 	}
 	writeJSON(w, 200, response{Code: 0, Message: "ok", Data: items})
@@ -287,6 +338,10 @@ func (s *server) scraperStatus(w http.ResponseWriter, r *http.Request, _ auth.Cl
 func parseVideoQuery(r *http.Request) (platform string, page, pageSize int) {
 	query := r.URL.Query()
 	platform = strings.ToLower(strings.TrimSpace(query.Get("platform")))
+	if platform == "tiktok" {
+		// Imported TikTok records use the existing douyin platform value.
+		platform = "douyin"
+	}
 	page = 1
 	if value, err := strconv.Atoi(query.Get("page")); err == nil && value > 0 {
 		page = value
@@ -736,7 +791,7 @@ func (s *server) requireAdmin(next func(http.ResponseWriter, *http.Request, auth
 }
 
 func publicUser(u account.User) userData {
-	return userData{ID: u.ID, Email: u.Email, Phone: u.Phone, Nickname: u.Nickname, AvatarURL: u.AvatarURL, Role: u.Role}
+	return userData{ID: u.ID, Email: u.Email, Phone: u.Phone, Nickname: u.Nickname, AvatarURL: u.AvatarURL, Bio: u.Bio, Role: u.Role}
 }
 func decodeJSON(w http.ResponseWriter, r *http.Request, value any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -761,7 +816,7 @@ func cors(next http.Handler) http.Handler {
 			w.Header().Set("Vary", "Origin")
 		}
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

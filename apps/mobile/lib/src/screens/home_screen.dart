@@ -6,8 +6,10 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
+import '../auth/auth_api.dart';
 import '../auth/auth_session.dart';
 import '../community/community_post.dart';
+import '../home/home_feed_api.dart';
 import 'community_publish_screen.dart';
 import 'group_chat_screen.dart';
 import 'messages_screen.dart';
@@ -212,10 +214,27 @@ const _samplePosts = [
   ),
 ];
 
+const _homeTabBarContentHeight = 72.0;
+const _homeTabBarBottomSpacing = 0.0;
+const _homeTabBarSafeAreaReduction = 20.0;
+
+double _homeTabBarBottomInset(BuildContext context) {
+  final safeBottom = MediaQuery.paddingOf(context).bottom;
+  return max(
+    _homeTabBarBottomSpacing,
+    safeBottom - _homeTabBarSafeAreaReduction,
+  );
+}
+
+double _homeTabBarInset(BuildContext context) {
+  return _homeTabBarContentHeight + _homeTabBarBottomInset(context);
+}
+
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.session});
+  const HomeScreen({super.key, required this.session, this.homeFeedApi});
 
   final AuthSession session;
+  final HomeFeedApi? homeFeedApi;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -238,14 +257,18 @@ class _HomeScreenState extends State<HomeScreen> {
   final Set<String> bookmarkedPosts = {};
   final CommunityPostStore communityPostStore = CommunityPostStore();
   final List<CommunityPost> publishedPosts = [];
+  final List<HomeFeedPost> importedPosts = [];
   late final List<_SamplePostData> samplePosts;
+  late final HomeFeedApi homeFeedApi;
 
   @override
   void initState() {
     super.initState();
     samplePosts = List<_SamplePostData>.of(_samplePosts)..shuffle(Random());
+    homeFeedApi = widget.homeFeedApi ?? HomeFeedApi();
     feedController.addListener(handleFeedScroll);
     unawaited(loadPublishedPosts());
+    unawaited(loadImportedPosts());
   }
 
   @override
@@ -304,6 +327,22 @@ class _HomeScreenState extends State<HomeScreen> {
         ..clear()
         ..addAll(posts);
     });
+  }
+
+  Future<void> loadImportedPosts() async {
+    final token = widget.session.accessToken;
+    if (token == null || token.isEmpty) return;
+    try {
+      final posts = await homeFeedApi.list(token);
+      if (!mounted) return;
+      setState(() {
+        importedPosts
+          ..clear()
+          ..addAll(posts);
+      });
+    } on AuthException {
+      // 保留本地示例动态，使首页在接口暂不可用时仍可正常浏览。
+    }
   }
 
   Future<void> openPublish() async {
@@ -439,6 +478,31 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget importedPostCard(HomeFeedPost post) {
+    final id = 'imported-${post.source}-${post.id}';
+    return _SamplePostCard(
+      key: Key(id),
+      post: _SamplePostData(
+        id: id,
+        author: post.author,
+        role: post.role,
+        time: '来自 ${post.source}',
+        content: post.content,
+        tags: post.tags,
+        likes: '0',
+        comments: '0',
+      ),
+      followed: followedAuthors.contains(post.author),
+      liked: likedPosts.contains(id),
+      bookmarked: bookmarkedPosts.contains(id),
+      onFollow: () => toggle(followedAuthors, post.author),
+      onLike: () => toggle(likedPosts, id),
+      onBookmark: () => toggle(bookmarkedPosts, id),
+      onComment: () => showMessage('评论入口已打开'),
+      onShare: () => showMessage('分享入口已打开'),
+    );
+  }
+
   Widget videoPostCard() {
     return _VideoPostCard(
       playing: videoPlaying,
@@ -538,6 +602,9 @@ class _HomeScreenState extends State<HomeScreen> {
       for (final post in publishedPosts) {
         add(publishedPostCard(post));
       }
+      for (final post in importedPosts) {
+        add(importedPostCard(post));
+      }
       add(
         _FeedLoadStatus(
           loading: loadingMore,
@@ -572,6 +639,9 @@ class _HomeScreenState extends State<HomeScreen> {
     for (final post in publishedPosts) {
       add(publishedPostCard(post));
     }
+    for (final post in importedPosts) {
+      add(importedPostCard(post));
+    }
     final visiblePosts = samplePosts.take(visibleSampleCount).toList();
     for (final post in visiblePosts) {
       add(samplePostCard(post));
@@ -582,7 +652,7 @@ class _HomeScreenState extends State<HomeScreen> {
         loading: loadingMore,
         loaded: visiblePosts.length,
         total: samplePosts.length,
-        completeText: '已加载全部 15 条社区动态',
+        completeText: '已加载全部数据',
       ),
     );
     return children;
@@ -590,6 +660,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final tabBarInset = _homeTabBarInset(context);
     return Scaffold(
       extendBody: true,
       backgroundColor: const Color(0xFFF7F7FA),
@@ -600,16 +671,36 @@ class _HomeScreenState extends State<HomeScreen> {
         transitionBuilder: (child, animation) =>
             FadeTransition(opacity: animation, child: child),
         child: bottomIndex == 1
-            ? VideoFeedScreen(
+            ? KeyedSubtree(
                 key: const ValueKey('video-tab'),
-                session: widget.session,
-                showBackButton: false,
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: tabBarInset),
+                  child: MediaQuery.removePadding(
+                    context: context,
+                    removeBottom: true,
+                    child: Container(
+                      key: const Key('home-tab-content-viewport'),
+                      child: VideoFeedScreen(
+                        session: widget.session,
+                        showBackButton: false,
+                      ),
+                    ),
+                  ),
+                ),
               )
             : bottomIndex == 2
-            ? MessagesScreen(
+            ? KeyedSubtree(
                 key: const ValueKey('messages-tab'),
-                session: widget.session,
-                showBottomNavigation: false,
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: tabBarInset),
+                  child: Container(
+                    key: const Key('home-tab-content-viewport'),
+                    child: MessagesScreen(
+                      session: widget.session,
+                      showBottomNavigation: false,
+                    ),
+                  ),
+                ),
               )
             : bottomIndex == 3
             ? ProfileScreen(
@@ -1168,7 +1259,7 @@ class _WelcomeCard extends StatelessWidget {
           entry(
             key: const Key('weekly-hot-entry'),
             label: 'AI 视频工作流，开始学习',
-            colors: const [Color(0xFF4030B4), Color(0xFF6250D4)],
+            colors: const [Color(0xFF95C8F4), Color(0xFF95C8F4)],
             onTap: onVideo,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -2203,97 +2294,111 @@ class _BottomNavigation extends StatelessWidget {
   final VoidCallback onPublish;
 
   @override
-  Widget build(BuildContext context) => SafeArea(
-    top: false,
-    minimum: const EdgeInsets.fromLTRB(10, 0, 10, 7),
-    child: SizedBox(
-      key: const Key('ios-glass-tab-bar'),
-      height: 72,
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.center,
-        children: [
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(29),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x240F172A),
-                    blurRadius: 24,
-                    offset: Offset(0, 8),
-                  ),
-                  BoxShadow(
-                    color: Color(0x12FFFFFF),
-                    blurRadius: 2,
-                    offset: Offset(0, -1),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                key: const Key('ios-glass-tab-surface'),
-                borderRadius: BorderRadius.circular(29),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: _homeTabBarBottomInset(context)),
+      child: MediaQuery.removePadding(
+        context: context,
+        removeBottom: true,
+        child: SafeArea(
+          top: false,
+          minimum: const EdgeInsets.fromLTRB(
+            10,
+            0,
+            10,
+            _homeTabBarBottomSpacing,
+          ),
+          child: SizedBox(
+            key: const Key('ios-glass-tab-bar'),
+            height: _homeTabBarContentHeight,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: [
+                Positioned.fill(
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.72),
                       borderRadius: BorderRadius.circular(29),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.82),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: _NavItem(
-                            icon: Icons.home_outlined,
-                            selectedIcon: Icons.home_rounded,
-                            label: '首页',
-                            selected: selectedIndex == 0,
-                            onTap: () => onSelected(0, '首页'),
-                          ),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x240F172A),
+                          blurRadius: 24,
+                          offset: Offset(0, 8),
                         ),
-                        Expanded(
-                          child: _NavItem(
-                            icon: Icons.video_library_outlined,
-                            selectedIcon: Icons.video_library_rounded,
-                            label: '视频',
-                            selected: selectedIndex == 1,
-                            onTap: () => onSelected(1, '视频'),
-                          ),
-                        ),
-                        const SizedBox(width: 52),
-                        Expanded(
-                          child: _NavItem(
-                            icon: Icons.forum_outlined,
-                            selectedIcon: Icons.forum_rounded,
-                            label: '消息',
-                            selected: selectedIndex == 2,
-                            onTap: () => onSelected(2, '消息'),
-                          ),
-                        ),
-                        Expanded(
-                          child: _NavItem(
-                            icon: Icons.account_circle_outlined,
-                            selectedIcon: Icons.account_circle_rounded,
-                            label: '我的',
-                            selected: selectedIndex == 3,
-                            onTap: () => onSelected(3, '我的'),
-                          ),
+                        BoxShadow(
+                          color: Color(0x12FFFFFF),
+                          blurRadius: 2,
+                          offset: Offset(0, -1),
                         ),
                       ],
                     ),
+                    child: ClipRRect(
+                      key: const Key('ios-glass-tab-surface'),
+                      borderRadius: BorderRadius.circular(29),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.72),
+                            borderRadius: BorderRadius.circular(29),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.82),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: _NavItem(
+                                  icon: Icons.home_outlined,
+                                  selectedIcon: Icons.home_rounded,
+                                  label: '首页',
+                                  selected: selectedIndex == 0,
+                                  onTap: () => onSelected(0, '首页'),
+                                ),
+                              ),
+                              Expanded(
+                                child: _NavItem(
+                                  icon: Icons.video_library_outlined,
+                                  selectedIcon: Icons.video_library_rounded,
+                                  label: '视频',
+                                  selected: selectedIndex == 1,
+                                  onTap: () => onSelected(1, '视频'),
+                                ),
+                              ),
+                              const SizedBox(width: 52),
+                              Expanded(
+                                child: _NavItem(
+                                  icon: Icons.forum_outlined,
+                                  selectedIcon: Icons.forum_rounded,
+                                  label: '消息',
+                                  selected: selectedIndex == 2,
+                                  onTap: () => onSelected(2, '消息'),
+                                ),
+                              ),
+                              Expanded(
+                                child: _NavItem(
+                                  icon: Icons.account_circle_outlined,
+                                  selectedIcon: Icons.account_circle_rounded,
+                                  label: '我的',
+                                  selected: selectedIndex == 3,
+                                  onTap: () => onSelected(3, '我的'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              ),
+                Positioned(top: 7, child: _PublishButton(onTap: onPublish)),
+              ],
             ),
           ),
-          Positioned(top: 7, child: _PublishButton(onTap: onPublish)),
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _NavItem extends StatelessWidget {

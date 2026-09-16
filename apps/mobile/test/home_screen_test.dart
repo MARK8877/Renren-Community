@@ -1,11 +1,15 @@
+import 'dart:convert';
+
 import 'package:creatorhub_app/src/auth/auth_api.dart';
 import 'package:creatorhub_app/src/auth/auth_session.dart';
+import 'package:creatorhub_app/src/home/home_feed_api.dart';
 import 'package:creatorhub_app/src/screens/home_screen.dart';
 import 'package:creatorhub_app/src/widgets/chat_avatar.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
 
 void main() {
   Future<void> pumpHome(WidgetTester tester) async {
@@ -132,6 +136,41 @@ void main() {
     expect(find.text('我的'), findsOneWidget);
   });
 
+  testWidgets('首页展示接口返回的 Product School 动态', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final client = _ImportedPostClient();
+    final session = AuthSession(
+      AuthApi(client: client, baseUrl: 'http://test.local'),
+    );
+    await session.login('test@example.com', 'Test123456!');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomeScreen(
+          session: session,
+          homeFeedApi: HomeFeedApi(
+            client: client,
+            baseUrl: 'http://test.local',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('Agentic Architecture'),
+      400,
+      scrollable: find.byType(Scrollable).first,
+      maxScrolls: 8,
+    );
+    expect(find.text('Agentic Architecture'), findsOneWidget);
+    expect(find.text('Product School'), findsOneWidget);
+    expect(
+      find.text('Artificial Intelligence · 来自 productschool'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('首页作者头像使用本地头像资源组件', (tester) async {
     await pumpHome(tester);
 
@@ -190,7 +229,7 @@ void main() {
     expect(foregroundMaterial, findsOneWidget);
   });
 
-  testWidgets('AI视频卡片渐变保持深色并承载白色文字', (tester) async {
+  testWidgets('AI视频卡片背景使用指定浅蓝色', (tester) async {
     await pumpHome(tester);
 
     final ink = tester.widget<Ink>(
@@ -200,10 +239,7 @@ void main() {
       ),
     );
     final gradient = (ink.decoration! as BoxDecoration).gradient!;
-    expect(
-      gradient.colors.every((color) => color.computeLuminance() < 0.18),
-      isTrue,
-    );
+    expect(gradient.colors, const [Color(0xFF95C8F4), Color(0xFF95C8F4)]);
   });
 
   testWidgets('宽屏下快捷入口第二行完整显示', (tester) async {
@@ -274,6 +310,17 @@ void main() {
 
     expect(find.text('已刷新最新内容'), findsOneWidget);
     expect(find.byKey(const Key('home-refresh-indicator')), findsOneWidget);
+  });
+
+  testWidgets('首页动态加载完成提示使用统一文案', (tester) async {
+    await pumpHome(tester);
+    final feed = find.byKey(const PageStorageKey<String>('home-feed-scroll'));
+    for (var index = 0; index < 4; index++) {
+      await tester.fling(feed, const Offset(0, -2400), 2400);
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('已加载全部数据'), findsOneWidget);
+    expect(find.text('已加载全部 15 条社区动态'), findsNothing);
   });
 
   testWidgets('图文动态使用朋友圈紧凑网格并支持全屏图片预览', (tester) async {
@@ -538,6 +585,72 @@ void main() {
     );
   });
 
+  testWidgets('视频和消息内容区域避开底部标签栏', (tester) async {
+    await pumpHome(tester);
+    await tester.pumpAndSettle();
+
+    final tabBar = tester.getRect(find.byKey(const Key('ios-glass-tab-bar')));
+    final viewport = find.byKey(const Key('home-tab-content-viewport'));
+
+    await tester.tap(find.byKey(const Key('nav-视频')));
+    await tester.pumpAndSettle();
+    expect(viewport, findsOneWidget);
+    expect(tester.getRect(viewport).bottom, lessThanOrEqualTo(tabBar.top + 1));
+    expect(tester.getRect(viewport).height, greaterThan(0));
+
+    await tester.tap(find.byKey(const Key('nav-消息')));
+    await tester.pumpAndSettle();
+    expect(viewport, findsOneWidget);
+    expect(tester.getRect(viewport).bottom, lessThanOrEqualTo(tabBar.top + 1));
+    expect(tester.getRect(viewport).height, greaterThan(0));
+  });
+
+  testWidgets('视频标题和工具栏贴近底部标签栏', (tester) async {
+    await pumpHome(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('nav-视频')));
+    await tester.pumpAndSettle();
+
+    final tabBar = tester.getRect(find.byKey(const Key('ios-glass-tab-bar')));
+    final description = tester.getRect(
+      find.byKey(const Key('video-description-overlay')),
+    );
+    final actionRail = tester.getRect(
+      find.byKey(const Key('video-action-rail')),
+    );
+    expect(description.bottom, closeTo(tabBar.top - 12, 1));
+    expect(actionRail.bottom, closeTo(tabBar.top - 12, 1));
+  });
+
+  testWidgets('Tabbar仅保留系统安全区间距', (tester) async {
+    await pumpHome(tester);
+    await tester.pumpAndSettle();
+
+    final tabBarRect = tester.getRect(
+      find.byKey(const Key('ios-glass-tab-bar')),
+    );
+    expect(tabBarRect.bottom, closeTo(844, 1));
+  });
+
+  testWidgets('Tabbar在iOS安全区内下移20px', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(padding: EdgeInsets.only(bottom: 34)),
+        child: MaterialApp(home: HomeScreen(session: AuthSession(AuthApi()))),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final tabBarRect = tester.getRect(
+      find.byKey(const Key('ios-glass-tab-bar')),
+    );
+    expect(tabBarRect.bottom, closeTo(830, 1));
+  });
+
   testWidgets('底部消息入口进入消息中心并可返回首页', (tester) async {
     await pumpHome(tester);
 
@@ -553,4 +666,45 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('home-search-bar')), findsOneWidget);
   });
+}
+
+class _ImportedPostClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final body = switch ((request.method, request.url.path)) {
+      ('POST', '/api/v1/auth/login') => {
+        'code': 0,
+        'message': 'ok',
+        'data': {
+          'accessToken': 'test-token',
+          'user': {'id': 1, 'nickname': '测试用户', 'role': 'user'},
+        },
+      },
+      ('GET', '/api/v1/home/posts') => {
+        'code': 0,
+        'message': 'ok',
+        'data': [
+          {
+            'id': 1,
+            'source': 'productschool',
+            'externalId': 'artificial-intelligence/agentic-architecture',
+            'author': 'Product School',
+            'role': 'Artificial Intelligence',
+            'content': 'Agentic Architecture',
+            'tags': ['#Artificial Intelligence'],
+            'url':
+                'https://productschool.com/blog/artificial-intelligence/agentic-architecture',
+            'scrapedAt': '2026-09-15T08:00:00Z',
+          },
+        ],
+      },
+      _ => {'code': 10404, 'message': 'not found'},
+    };
+    return http.StreamedResponse(
+      Stream<List<int>>.fromIterable([utf8.encode(jsonEncode(body))]),
+      body['code'] == 10404 ? 404 : 200,
+      request: request,
+      headers: const {'content-type': 'application/json'},
+    );
+  }
 }
