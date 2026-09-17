@@ -42,5 +42,42 @@ void main() {
     expect(find.text('测试短剧'), findsWidgets);
     expect(find.text('第 1 集 / 共 2 集'), findsOneWidget);
     expect(find.text('第1集.mp4'), findsNothing);
+    expect(find.byKey(const Key('short-drama-episode-picker')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('short-drama-episode-picker')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('short-drama-episode-grid')), findsOneWidget);
+    expect(
+      find.byKey(const Key('short-drama-episode-choice-1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('short-drama-episode-choice-2')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('short-drama-selected-episode-1')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('short-drama-episode-choice-2')));
+    await tester.pump();
+    expect(find.text('第 2 集 / 共 2 集'), findsOneWidget);
+
+    expect(
+      find.byKey(const Key('short-drama-playback-indicator')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(const Key('short-drama-episode-2')));
+    await tester.pump();
+    expect(
+      find.byKey(const Key('short-drama-playback-indicator')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('short-drama-episode-2')));
+    await tester.pump();
+    expect(
+      find.byKey(const Key('short-drama-playback-indicator')),
+      findsNothing,
+    );
   });
 }

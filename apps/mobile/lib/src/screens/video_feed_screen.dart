@@ -447,6 +447,11 @@ int? shortDramaNextEpisodeIndex({
   return position >= duration ? currentIndex + 1 : null;
 }
 
+String? shortDramaVideoDescription({
+  required bool isShortDrama,
+  required String caption,
+}) => isShortDrama ? null : caption;
+
 class ShortDramaFeedScreen extends StatefulWidget {
   const ShortDramaFeedScreen({
     super.key,
@@ -587,13 +592,16 @@ class _ShortDramaFeedScreenState extends State<ShortDramaFeedScreen> {
     }
   }
 
-  void prepareAround(int index) {
+  Future<void> prepareAround(int index) async {
+    final pauses = <Future<void>>[];
     for (final entry in controllers.entries) {
       if (entry.key != index && entry.value.value.isInitialized) {
-        unawaited(entry.value.pause());
+        pauses.add(entry.value.pause());
       }
     }
-    unawaited(ensureEpisodeReady(index).then((_) => playEpisode(index)));
+    if (pauses.isNotEmpty) await Future.wait(pauses);
+    await ensureEpisodeReady(index);
+    await playEpisode(index);
     unawaited(ensureEpisodeReady(index - 1));
     unawaited(ensureEpisodeReady(index + 1));
     for (final cachedIndex in controllers.keys.toList()) {
@@ -624,6 +632,27 @@ class _ShortDramaFeedScreenState extends State<ShortDramaFeedScreen> {
     setState(() => paused = !paused);
     if (controller?.value.isInitialized != true) return;
     paused ? unawaited(controller!.pause()) : unawaited(controller!.play());
+  }
+
+  void showEpisodePicker() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetContext) => _ShortDramaEpisodePicker(
+        drama: widget.drama,
+        currentIndex: currentIndex,
+        onSelected: (index) {
+          Navigator.pop(sheetContext);
+          if (index == currentIndex) return;
+          setState(() {
+            paused = false;
+            failed = false;
+          });
+          if (pageController.hasClients) pageController.jumpToPage(index);
+        },
+      ),
+    );
   }
 
   Widget buildEpisodeLayer(int index) {
@@ -697,6 +726,26 @@ class _ShortDramaFeedScreenState extends State<ShortDramaFeedScreen> {
                 child: IgnorePointer(child: buildEpisodeLayer(index)),
               ),
             ),
+            if (paused)
+              IgnorePointer(
+                child: Center(
+                  child: Container(
+                    key: const Key('short-drama-playback-indicator'),
+                    width: 74,
+                    height: 74,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF17213A).withValues(alpha: 0.72),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: const Icon(
+                      Icons.play_arrow_rounded,
+                      size: 48,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
             Positioned(
               left: 12,
               top: MediaQuery.paddingOf(context).top + 8,
@@ -730,41 +779,65 @@ class _ShortDramaFeedScreenState extends State<ShortDramaFeedScreen> {
               left: 16,
               right: 82,
               bottom: bottom + 22,
-              child: IgnorePointer(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.drama.name,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                        shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
-                      ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.drama.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '第 ${episode.episode} 集 / 共 ${widget.drama.totalEpisodes} 集',
-                      key: const Key('short-drama-episode-progress'),
-                      style: const TextStyle(
-                        color: Color(0xFF95C8F4),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800,
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Text(
+                        '第 ${episode.episode} 集 / 共 ${widget.drama.totalEpisodes} 集',
+                        key: const Key('short-drama-episode-progress'),
+                        style: const TextStyle(
+                          color: Color(0xFF95C8F4),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      currentIndex == widget.drama.episodes.length - 1
-                          ? '已播放全部剧集'
-                          : '上滑播放下一集',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 11,
+                      const SizedBox(width: 10),
+                      GestureDetector(
+                        key: const Key('short-drama-episode-picker'),
+                        onTap: showEpisodePicker,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 9,
+                              vertical: 5,
+                            ),
+                            child: Text(
+                              '选集',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    currentIndex == widget.drama.episodes.length - 1
+                        ? '已播放全部剧集'
+                        : '上滑播放下一集',
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
+                ],
               ),
             ),
             Positioned(
@@ -791,6 +864,139 @@ class _ShortDramaFeedScreenState extends State<ShortDramaFeedScreen> {
       ),
     );
   }
+}
+
+class _ShortDramaEpisodePicker extends StatelessWidget {
+  const _ShortDramaEpisodePicker({
+    required this.drama,
+    required this.currentIndex,
+    required this.onSelected,
+  });
+
+  final ShortDramaData drama;
+  final int currentIndex;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    top: false,
+    child: Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.62,
+      ),
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 10),
+      decoration: const BoxDecoration(
+        color: Color(0xFFF8FAFF),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      drama.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF17213A),
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '共 ${drama.totalEpisodes} 集',
+                      style: const TextStyle(
+                        color: Color(0xFF7D8799),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                key: const Key('short-drama-picker-close'),
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close_rounded),
+                color: const Color(0xFF4E5870),
+                tooltip: '关闭选集',
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: GridView.builder(
+              key: const Key('short-drama-episode-grid'),
+              padding: const EdgeInsets.only(bottom: 8),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 10,
+                childAspectRatio: 2.25,
+              ),
+              itemCount: drama.episodes.length,
+              itemBuilder: (context, index) {
+                final episode = drama.episodes[index];
+                final selected = index == currentIndex;
+                return InkWell(
+                  key: Key('short-drama-episode-choice-${episode.episode}'),
+                  onTap: () => onSelected(index),
+                  borderRadius: BorderRadius.circular(12),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: selected ? const Color(0xFF95C8F4) : Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: selected
+                            ? const Color(0xFF5AA5E8)
+                            : const Color(0xFFE3E8F1),
+                      ),
+                    ),
+                    child: Center(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (selected)
+                            Padding(
+                              padding: EdgeInsets.only(right: 4),
+                              child: Icon(
+                                Icons.check_rounded,
+                                key: Key(
+                                  'short-drama-selected-episode-${episode.episode}',
+                                ),
+                                size: 16,
+                                color: Color(0xFF17213A),
+                              ),
+                            ),
+                          Text(
+                            '第 ${episode.episode} 集',
+                            style: TextStyle(
+                              color: selected
+                                  ? const Color(0xFF17213A)
+                                  : const Color(0xFF3E4961),
+                              fontSize: 13,
+                              fontWeight: selected
+                                  ? FontWeight.w900
+                                  : FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _ShortDramaAction extends StatelessWidget {
@@ -1111,6 +1317,13 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
     final controller = currentController;
     if (controller?.value.isInitialized == true) {
       unawaited(controller!.pause());
+    }
+  }
+
+  Future<void> pauseForOverlayAndWait() async {
+    final controller = currentController;
+    if (controller?.value.isInitialized == true) {
+      await controller!.pause();
     }
   }
 
@@ -1769,7 +1982,8 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
     final dramaId = video.shortDramaId;
     final drama = dramaId == null ? null : shortDramas[dramaId];
     if (drama == null || drama.episodes.isEmpty) return;
-    pauseForOverlay();
+    await pauseForOverlayAndWait();
+    if (!mounted) return;
     await Navigator.push<void>(
       context,
       PageRouteBuilder<void>(
@@ -2696,24 +2910,33 @@ class _VideoDescription extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        Text(
-          video.caption,
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: Color(0xFFF4F3FA),
-            fontSize: 14,
-            height: 1.42,
-            shadows: [
-              Shadow(
-                color: Color(0xCC000000),
-                blurRadius: 6,
-                offset: Offset(0, 2),
-              ),
-            ],
+        if (shortDramaVideoDescription(
+              isShortDrama: video.isShortDrama,
+              caption: video.caption,
+            ) !=
+            null) ...[
+          const SizedBox(height: 8),
+          Text(
+            shortDramaVideoDescription(
+              isShortDrama: video.isShortDrama,
+              caption: video.caption,
+            )!,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFFF4F3FA),
+              fontSize: 14,
+              height: 1.42,
+              shadows: [
+                Shadow(
+                  color: Color(0xCC000000),
+                  blurRadius: 6,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
           ),
-        ),
+        ],
         if (video.groupName != null) ...[
           const SizedBox(height: 12),
           SizedBox(
