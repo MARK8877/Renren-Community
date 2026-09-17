@@ -8,6 +8,7 @@ import 'package:video_player/video_player.dart';
 import '../auth/auth_session.dart';
 import '../video/video_api.dart';
 import '../video/video_pagination.dart';
+import '../shortdrama/short_drama_api.dart';
 import '../widgets/chat_avatar.dart';
 import 'group_chat_screen.dart';
 
@@ -108,6 +109,11 @@ class _VideoFeedItem {
     required this.shares,
     this.groupName,
     this.groupMembers,
+    this.shortDramaId,
+    this.shortDramaName,
+    this.shortDramaEpisodeCount,
+    this.shortDramaEpisodeTitle,
+    this.shortDramaEpisodeUrl,
   });
 
   final String id;
@@ -119,6 +125,13 @@ class _VideoFeedItem {
   final int shares;
   final String? groupName;
   final String? groupMembers;
+  final int? shortDramaId;
+  final String? shortDramaName;
+  final int? shortDramaEpisodeCount;
+  final String? shortDramaEpisodeTitle;
+  final String? shortDramaEpisodeUrl;
+
+  bool get isShortDrama => shortDramaId != null;
 }
 
 class _VideoComment {
@@ -422,9 +435,383 @@ class VideoFeedScreen extends StatefulWidget {
   State<VideoFeedScreen> createState() => _VideoFeedScreenState();
 }
 
+int? shortDramaNextEpisodeIndex({
+  required int currentIndex,
+  required int totalEpisodes,
+  required Duration position,
+  required Duration duration,
+  required bool isPlaying,
+}) {
+  if (isPlaying || duration <= Duration.zero) return null;
+  if (currentIndex < 0 || currentIndex + 1 >= totalEpisodes) return null;
+  return position >= duration ? currentIndex + 1 : null;
+}
+
+class ShortDramaFeedScreen extends StatefulWidget {
+  const ShortDramaFeedScreen({
+    super.key,
+    required this.session,
+    required this.drama,
+    required this.api,
+  });
+
+  final AuthSession session;
+  final ShortDramaData drama;
+  final ShortDramaApi api;
+
+  @override
+  State<ShortDramaFeedScreen> createState() => _ShortDramaFeedScreenState();
+}
+
+class _ShortDramaFeedScreenState extends State<ShortDramaFeedScreen> {
+  late final PageController pageController;
+  late final _SinglePageScrollPhysics pagePhysics;
+  final controllers = <int, VideoPlayerController>{};
+  final initializing = <int, Future<void>>{};
+  int currentIndex = 0;
+  int? activeDragStartPage;
+  int? autoAdvancingFrom;
+  bool paused = false;
+  bool failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    pageController = PageController();
+    pagePhysics = _SinglePageScrollPhysics(
+      parent: const BouncingScrollPhysics(),
+      startPageProvider: () => activeDragStartPage,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => prepareAround(0));
+  }
+
+  @override
+  void dispose() {
+    pageController.dispose();
+    for (final controller in controllers.values) {
+      unawaited(controller.dispose());
+    }
+    super.dispose();
+  }
+
+  Future<void> initializeEpisode(int index) async {
+    if (index < 0 || index >= widget.drama.episodes.length) return;
+    final episode = widget.drama.episodes[index];
+    var source = episode.m3u8Url;
+    final token = widget.session.accessToken;
+    if (index == currentIndex && token != null && token.isNotEmpty) {
+      try {
+        final refreshed = (await widget.api.playUrl(
+          token,
+          widget.drama.id,
+          index + 1,
+        )).url;
+        if (refreshed.isNotEmpty) source = refreshed;
+      } catch (_) {
+        if (source.isEmpty && mounted && index == currentIndex) {
+          setState(() => failed = true);
+        }
+      }
+    }
+    if (source.isEmpty) return;
+    final controller = VideoPlayerController.networkUrl(Uri.parse(source));
+    controllers[index] = controller;
+    try {
+      await controller.initialize();
+      if (!mounted || (index - currentIndex).abs() > 1) {
+        controllers.remove(index);
+        await controller.dispose();
+        return;
+      }
+      await controller.setLooping(false);
+      await controller.pause();
+      controller.addListener(() {
+        if (!mounted || index != currentIndex) return;
+        final value = controller.value;
+        final nextIndex = shortDramaNextEpisodeIndex(
+          currentIndex: index,
+          totalEpisodes: widget.drama.episodes.length,
+          position: value.position,
+          duration: value.duration,
+          isPlaying: value.isPlaying,
+        );
+        if (nextIndex == null || autoAdvancingFrom == index) return;
+        autoAdvancingFrom = index;
+        unawaited(_advanceToEpisode(nextIndex, index));
+      });
+      if (mounted && index == currentIndex) {
+        setState(() => failed = false);
+        unawaited(playEpisode(index));
+      }
+    } catch (_) {
+      if (identical(controllers[index], controller)) controllers.remove(index);
+      await controller.dispose();
+      if (mounted && index == currentIndex) setState(() => failed = true);
+    }
+  }
+
+  Future<void> ensureEpisodeReady(int index) {
+    if (index < 0 || index >= widget.drama.episodes.length) {
+      return Future<void>.value();
+    }
+    final existing = controllers[index];
+    if (existing?.value.isInitialized == true) return Future<void>.value();
+    final pending = initializing[index];
+    if (pending != null) return pending;
+    late final Future<void> task;
+    task = initializeEpisode(index).whenComplete(() {
+      if (identical(initializing[index], task)) initializing.remove(index);
+    });
+    initializing[index] = task;
+    return task;
+  }
+
+  Future<void> playEpisode(int index) async {
+    if (!mounted || index != currentIndex || paused) return;
+    final controller = controllers[index];
+    if (controller?.value.isInitialized != true) return;
+    await controller!.play();
+  }
+
+  Future<void> _advanceToEpisode(int nextIndex, int fromIndex) async {
+    try {
+      if (mounted) {
+        await pageController.animateToPage(
+          nextIndex,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    } finally {
+      if (autoAdvancingFrom == fromIndex) autoAdvancingFrom = null;
+    }
+  }
+
+  void prepareAround(int index) {
+    for (final entry in controllers.entries) {
+      if (entry.key != index && entry.value.value.isInitialized) {
+        unawaited(entry.value.pause());
+      }
+    }
+    unawaited(ensureEpisodeReady(index).then((_) => playEpisode(index)));
+    unawaited(ensureEpisodeReady(index - 1));
+    unawaited(ensureEpisodeReady(index + 1));
+    for (final cachedIndex in controllers.keys.toList()) {
+      if ((cachedIndex - index).abs() <= 1 ||
+          initializing.containsKey(cachedIndex)) {
+        continue;
+      }
+      final controller = controllers.remove(cachedIndex);
+      if (controller != null) unawaited(controller.dispose());
+    }
+  }
+
+  bool handleScrollNotification(ScrollNotification notification) {
+    if (notification.depth != 0) return false;
+    if (notification is ScrollStartNotification) {
+      final viewport = notification.metrics.viewportDimension;
+      activeDragStartPage = viewport > 0
+          ? (notification.metrics.pixels / viewport).round()
+          : currentIndex;
+    } else if (notification is ScrollEndNotification) {
+      activeDragStartPage = null;
+    }
+    return false;
+  }
+
+  void togglePlayback() {
+    final controller = controllers[currentIndex];
+    setState(() => paused = !paused);
+    if (controller?.value.isInitialized != true) return;
+    paused ? unawaited(controller!.pause()) : unawaited(controller!.play());
+  }
+
+  Widget buildEpisodeLayer(int index) {
+    final episode = widget.drama.episodes[index];
+    final controller = controllers[index];
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ColoredBox(
+          color: Colors.black,
+          child: Image.asset(
+            'assets/images/community-design-collaboration.png',
+            fit: BoxFit.cover,
+            semanticLabel: '${widget.drama.name}第${episode.episode}集封面',
+          ),
+        ),
+        if (controller?.value.isInitialized == true)
+          FittedBox(
+            fit: BoxFit.cover,
+            clipBehavior: Clip.hardEdge,
+            child: SizedBox(
+              width: controller!.value.size.width,
+              height: controller.value.size.height,
+              child: VideoPlayer(controller),
+            ),
+          ),
+        if (index == currentIndex && failed)
+          const Center(
+            child: Text(
+              '本集暂时无法播放',
+              style: TextStyle(color: Colors.white70, fontSize: 14),
+            ),
+          ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.paddingOf(context).bottom;
+    final episode = widget.drama.episodes[currentIndex];
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: NotificationListener<ScrollNotification>(
+        onNotification: handleScrollNotification,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            PageView.builder(
+              key: const Key('short-drama-vertical-feed'),
+              controller: pageController,
+              scrollDirection: Axis.vertical,
+              pageSnapping: false,
+              allowImplicitScrolling: true,
+              physics: pagePhysics,
+              itemCount: widget.drama.episodes.length,
+              onPageChanged: (index) {
+                setState(() {
+                  currentIndex = index;
+                  paused = false;
+                  failed = false;
+                });
+                prepareAround(index);
+              },
+              itemBuilder: (context, index) => GestureDetector(
+                key: Key(
+                  'short-drama-episode-${widget.drama.episodes[index].episode}',
+                ),
+                behavior: HitTestBehavior.opaque,
+                onTap: togglePlayback,
+                child: IgnorePointer(child: buildEpisodeLayer(index)),
+              ),
+            ),
+            Positioned(
+              left: 12,
+              top: MediaQuery.paddingOf(context).top + 8,
+              child: IconButton(
+                key: const Key('short-drama-back'),
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(
+                  Icons.arrow_back_ios_new_rounded,
+                  color: Colors.white,
+                ),
+                tooltip: '返回视频',
+              ),
+            ),
+            Positioned(
+              left: 60,
+              top: MediaQuery.paddingOf(context).top + 17,
+              right: 56,
+              child: Text(
+                widget.drama.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            Positioned(
+              left: 16,
+              right: 82,
+              bottom: bottom + 22,
+              child: IgnorePointer(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.drama.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                        shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '第 ${episode.episode} 集 / 共 ${widget.drama.totalEpisodes} 集',
+                      key: const Key('short-drama-episode-progress'),
+                      style: const TextStyle(
+                        color: Color(0xFF95C8F4),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      currentIndex == widget.drama.episodes.length - 1
+                          ? '已播放全部剧集'
+                          : '上滑播放下一集',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Positioned(
+              right: 14,
+              bottom: bottom + 24,
+              child: Column(
+                children: [
+                  _ShortDramaAction(
+                    icon: Icons.favorite_border_rounded,
+                    label: '喜欢',
+                  ),
+                  const SizedBox(height: 18),
+                  _ShortDramaAction(
+                    icon: Icons.chat_bubble_outline_rounded,
+                    label: '评论',
+                  ),
+                  const SizedBox(height: 18),
+                  _ShortDramaAction(icon: Icons.ios_share_rounded, label: '分享'),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ShortDramaAction extends StatelessWidget {
+  const _ShortDramaAction({required this.icon, required this.label});
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    children: [
+      Icon(icon, color: Colors.white, size: 28),
+      const SizedBox(height: 4),
+      Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+    ],
+  );
+}
+
 class _VideoFeedScreenState extends State<VideoFeedScreen> {
   late List<_VideoFeedItem> videoItems;
   late final VideoApi videoApi;
+  late final ShortDramaApi shortDramaApi;
   late final VideoPagination remotePagination;
   late final PageController pageController;
   late final _SinglePageScrollPhysics pagePhysics;
@@ -433,6 +820,7 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
   final likedVideos = <String>{};
   final followedCreators = <String>{};
   final joinedGroups = <String>{};
+  final shortDramas = <int, ShortDramaData>{};
   final comments = <String, List<_VideoComment>>{};
   final videoControllers = <int, VideoPlayerController>{};
   final initializingVideos = <int, Future<void>>{};
@@ -455,6 +843,7 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
     super.initState();
     videoItems = List<_VideoFeedItem>.of(_videoItems);
     videoApi = widget.videoApi ?? VideoApi();
+    shortDramaApi = ShortDramaApi();
     final token = widget.session.accessToken ?? '';
     remotePagination = VideoPagination(
       pageSize: _videoPageSize,
@@ -478,7 +867,11 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
     if (token == null || token.isEmpty) return;
     try {
       final remoteVideos = await remotePagination.loadNext();
-      if (!mounted || remoteVideos.isEmpty) return;
+      if (!mounted) return;
+      if (remoteVideos.isEmpty) {
+        unawaited(loadRemoteShortDramas());
+        return;
+      }
       final mapped = mapRemoteVideos(remoteVideos, 0);
       for (final controller in videoControllers.values) {
         unawaited(controller.dispose());
@@ -500,6 +893,47 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
       );
     } catch (_) {
       // Keep local examples when the API is unavailable.
+    }
+    unawaited(loadRemoteShortDramas());
+  }
+
+  Future<void> loadRemoteShortDramas() async {
+    final token = widget.session.accessToken;
+    if (token == null || token.isEmpty) return;
+    try {
+      final dramas = await shortDramaApi.list(token, pageSize: 10);
+      if (!mounted) return;
+      final items = <_VideoFeedItem>[];
+      for (final drama in dramas) {
+        if (drama.episodes.isEmpty) continue;
+        final first = drama.episodes.first;
+        items.add(
+          _VideoFeedItem(
+            id: 'short-drama-${drama.id}',
+            author: '短剧创作实验室',
+            caption: first.title,
+            poster: 'assets/images/community-design-collaboration.png',
+            source: first.m3u8Url,
+            likes: 0,
+            shares: 0,
+            shortDramaId: drama.id,
+            shortDramaName: drama.name,
+            shortDramaEpisodeCount: drama.totalEpisodes,
+            shortDramaEpisodeTitle: first.title,
+            shortDramaEpisodeUrl: first.m3u8Url,
+          ),
+        );
+      }
+      if (items.isEmpty) return;
+      setState(() {
+        shortDramas
+          ..clear()
+          ..addEntries(dramas.map((drama) => MapEntry(drama.id, drama)));
+        videoItems.removeWhere((item) => item.isShortDrama);
+        videoItems.addAll(items);
+      });
+    } catch (_) {
+      // Keep the regular video feed when short-drama data is unavailable.
     }
   }
 
@@ -1331,6 +1765,29 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
     if (mounted) resumeAfterOverlay();
   }
 
+  Future<void> openShortDrama(_VideoFeedItem video) async {
+    final dramaId = video.shortDramaId;
+    final drama = dramaId == null ? null : shortDramas[dramaId];
+    if (drama == null || drama.episodes.isEmpty) return;
+    pauseForOverlay();
+    await Navigator.push<void>(
+      context,
+      PageRouteBuilder<void>(
+        transitionDuration: const Duration(milliseconds: 240),
+        reverseTransitionDuration: const Duration(milliseconds: 180),
+        pageBuilder: (_, animation, _) => FadeTransition(
+          opacity: animation,
+          child: ShortDramaFeedScreen(
+            session: widget.session,
+            drama: drama,
+            api: shortDramaApi,
+          ),
+        ),
+      ),
+    );
+    if (mounted) resumeAfterOverlay();
+  }
+
   Widget buildVideoLayer(int index, _VideoFeedItem video) {
     final controller = videoControllers[index];
     final firstFrameReady =
@@ -1525,6 +1982,7 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
                         video: video,
                         joined: joined,
                         onJoin: () => openGroup(video),
+                        onOpenDrama: () => openShortDrama(video),
                       ),
                     ),
                     Positioned(
@@ -2125,11 +2583,13 @@ class _VideoDescription extends StatelessWidget {
     required this.video,
     required this.joined,
     required this.onJoin,
+    required this.onOpenDrama,
   });
 
   final _VideoFeedItem video;
   final bool joined;
   final VoidCallback onJoin;
+  final VoidCallback onOpenDrama;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -2140,6 +2600,70 @@ class _VideoDescription extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (video.isShortDrama) ...[
+          GestureDetector(
+            key: Key('short-drama-entry-${video.id}'),
+            onTap: onOpenDrama,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: const Color(0xFF95C8F4).withValues(alpha: 0.18),
+                border: Border.all(
+                  color: const Color(0xFF95C8F4).withValues(alpha: 0.52),
+                ),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(11, 9, 9, 9),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.local_movies_rounded,
+                      key: Key('short-drama-entry-icon'),
+                      color: Color(0xFF95C8F4),
+                      size: 19,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            video.shortDramaName ?? '短剧',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            '共 ${video.shortDramaEpisodeCount ?? 0} 集 · 第 1 集',
+                            style: const TextStyle(
+                              color: Color(0xFFD9ECFF),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      '进入短剧  ›',
+                      style: TextStyle(
+                        color: Color(0xFF95C8F4),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 11),
+        ],
         Row(
           children: [
             Container(

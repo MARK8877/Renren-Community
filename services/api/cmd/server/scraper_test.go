@@ -14,10 +14,10 @@ import (
 )
 
 type fakeScraperController struct {
-	job       scraper.Job
-	snapshot  scraper.StatusSnapshot
+	job        scraper.Job
+	snapshot   scraper.StatusSnapshot
 	triggerErr error
-	triggered int
+	triggered  int
 }
 
 func (f *fakeScraperController) Trigger(_ context.Context, trigger scraper.TriggerType) (scraper.Job, error) {

@@ -334,7 +334,7 @@ class _ProfileHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: const Key('profile-header'),
-    padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+    padding: const EdgeInsets.fromLTRB(14, 14, 14, 15),
     decoration: BoxDecoration(
       gradient: const LinearGradient(
         colors: [Color(0xFF6758EA), Color(0xFF9B63EE)],
@@ -436,7 +436,7 @@ class _ProfileHeader extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 20),
         _StatsCard(
           key: const Key('profile-header-stats'),
           onFollowing: onFollowing,
@@ -465,7 +465,7 @@ class _StatsCard extends StatelessWidget {
     decoration: const BoxDecoration(
       border: Border(top: BorderSide(color: Color(0x40FFFFFF))),
     ),
-    padding: const EdgeInsets.only(top: 2),
+    padding: const EdgeInsets.only(top: 20),
     child: Row(
       children: [
         _StatItem(label: '关注', value: '24', onTap: onFollowing),

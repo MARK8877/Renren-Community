@@ -505,6 +505,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget videoPostCard() {
     return _VideoPostCard(
+      key: const Key('home-static-video-post'),
       playing: videoPlaying,
       followed: followedAuthors.contains('Kevin AI'),
       joined: joinedCommunities.contains('AI 视频创作者交流群'),
@@ -587,6 +588,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final visibleHotPosts = hotPosts.take(visibleSampleCount).toList();
       const articleHeat = 660;
       add(const _ChannelHint(text: '按点赞与评论互动热度排序'));
+      for (final post in importedPosts) {
+        add(importedPostCard(post));
+      }
       add(videoPostCard());
       for (final post in visibleHotPosts.where(
         (post) => postHeat(post) > articleHeat,
@@ -601,9 +605,6 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       for (final post in publishedPosts) {
         add(publishedPostCard(post));
-      }
-      for (final post in importedPosts) {
-        add(importedPostCard(post));
       }
       add(
         _FeedLoadStatus(
@@ -634,13 +635,13 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
+    for (final post in importedPosts) {
+      add(importedPostCard(post));
+    }
     add(videoPostCard());
     add(articlePostCard());
     for (final post in publishedPosts) {
       add(publishedPostCard(post));
-    }
-    for (final post in importedPosts) {
-      add(importedPostCard(post));
     }
     final visiblePosts = samplePosts.take(visibleSampleCount).toList();
     for (final post in visiblePosts) {
@@ -943,30 +944,42 @@ class _Header extends StatelessWidget {
                 children: [
                   const SizedBox(width: 44),
                   Expanded(
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: _TopTab(
-                            label: '关注',
-                            selected: selectedTab == '关注',
-                            onTap: () => onTabSelected('关注'),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final groupWidth = constraints.maxWidth < 210
+                            ? constraints.maxWidth
+                            : 210.0;
+                        return Center(
+                          child: SizedBox(
+                            width: groupWidth,
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: _TopTab(
+                                    label: '关注',
+                                    selected: selectedTab == '关注',
+                                    onTap: () => onTabSelected('关注'),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: _TopTab(
+                                    label: '推荐',
+                                    selected: selectedTab == '推荐',
+                                    onTap: () => onTabSelected('推荐'),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: _TopTab(
+                                    label: '热门',
+                                    selected: selectedTab == '热门',
+                                    onTap: () => onTabSelected('热门'),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                        Expanded(
-                          child: _TopTab(
-                            label: '推荐',
-                            selected: selectedTab == '推荐',
-                            onTap: () => onTabSelected('推荐'),
-                          ),
-                        ),
-                        Expanded(
-                          child: _TopTab(
-                            label: '热门',
-                            selected: selectedTab == '热门',
-                            onTap: () => onTabSelected('热门'),
-                          ),
-                        ),
-                      ],
+                        );
+                      },
                     ),
                   ),
                   SizedBox(
@@ -1372,6 +1385,7 @@ class _WelcomeCard extends StatelessWidget {
 
 class _VideoPostCard extends StatelessWidget {
   const _VideoPostCard({
+    super.key,
     required this.playing,
     required this.followed,
     required this.joined,

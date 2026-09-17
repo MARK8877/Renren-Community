@@ -241,19 +241,19 @@ void main() {
     final stats = tester.getRect(find.byKey(const Key('profile-header-stats')));
 
     expect(stats.top - bio.bottom, 6);
-    expect(header.bottom - stats.bottom, 0);
+    expect(header.bottom - stats.bottom, 15);
   });
 
-  testWidgets('关注粉丝获赞统计行上移十像素', (tester) async {
+  testWidgets('关注粉丝获赞与横线保持二十像素间距', (tester) async {
     await pumpProfile(tester);
 
     final stats = tester.getRect(find.byKey(const Key('profile-header-stats')));
     final firstStat = tester.getRect(find.byKey(const Key('profile-stat-关注')));
 
-    expect(firstStat.top - stats.top, 3);
+    expect(firstStat.top - stats.top, 21);
   });
 
-  testWidgets('个人简介与头像资料列对齐且横线贴近头像', (tester) async {
+  testWidgets('个人简介与头像资料列对齐且横线与头像保持二十像素', (tester) async {
     await pumpProfile(tester);
 
     final avatar = tester.getRect(find.byKey(const Key('profile-avatar')));
@@ -266,7 +266,8 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(stats.top - avatar.bottom, lessThanOrEqualTo(10));
+    // 头像图片位于 3px 白色外框内，因此坐标差为 20 + 3。
+    expect(stats.top - avatar.bottom, 23);
   });
 
   testWidgets('关注粉丝获赞进入对应的专属子页面', (tester) async {

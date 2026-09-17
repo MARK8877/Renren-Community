@@ -23,22 +23,7 @@ func (r *Repository) Upsert(ctx context.Context, item Video) error {
 }
 
 func (r *Repository) List(ctx context.Context, platform string, page, pageSize int) ([]Video, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
-	offset := (page - 1) * pageSize
-	query := `SELECT id,platform,external_id,title,play_url,like_count,comment_count,share_count,published_at,scraped_at
-		FROM platform_videos`
-	args := []any{}
-	if platform != "" {
-		query += " WHERE platform=?"
-		args = append(args, platform)
-	}
-	query += " ORDER BY like_count DESC, published_at DESC LIMIT ? OFFSET ?"
-	args = append(args, pageSize, offset)
+	query, args := listQuery(platform, page, pageSize)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -59,6 +44,26 @@ func (r *Repository) List(ctx context.Context, platform string, page, pageSize i
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func listQuery(platform string, page, pageSize int) (string, []any) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+	query := `SELECT id,platform,external_id,title,play_url,like_count,comment_count,share_count,published_at,scraped_at
+		FROM platform_videos`
+	args := []any{}
+	if platform != "" {
+		query += " WHERE platform=?"
+		args = append(args, platform)
+	}
+	query += " ORDER BY scraped_at DESC, published_at DESC, id DESC LIMIT ? OFFSET ?"
+	args = append(args, pageSize, offset)
+	return query, args
 }
 
 func (r *Repository) DeleteOlderThan(ctx context.Context, cutoff time.Time) error {

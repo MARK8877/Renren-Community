@@ -48,6 +48,18 @@ void main() {
     expect(find.byIcon(CupertinoIcons.bell), findsOneWidget);
   });
 
+  testWidgets('首页顶部频道标签间距收窄二十像素', (tester) async {
+    await pumpHome(tester);
+    await tester.pumpAndSettle();
+
+    final follow = tester.getRect(find.byKey(const Key('top-tab-关注')));
+    final recommend = tester.getRect(find.byKey(const Key('top-tab-推荐')));
+    final hot = tester.getRect(find.byKey(const Key('top-tab-热门')));
+
+    expect(recommend.center.dx - follow.center.dx, 70);
+    expect(hot.center.dx - recommend.center.dx, 70);
+  });
+
   testWidgets('发布按钮进入动态发布页并将内容插入首页', (tester) async {
     await pumpHome(tester);
 
@@ -169,6 +181,44 @@ void main() {
       find.text('Artificial Intelligence · 来自 productschool'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('首页将采集动态排在静态示例之前', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(390, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = _ImportedPostClient();
+    final session = AuthSession(
+      AuthApi(client: client, baseUrl: 'http://test.local'),
+    );
+    await session.login('test@example.com', 'Test123456!');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomeScreen(
+          session: session,
+          homeFeedApi: HomeFeedApi(
+            client: client,
+            baseUrl: 'http://test.local',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final sliver = tester.widget<SliverList>(
+      find.byKey(const Key('home-single-column-feed')),
+    );
+    final children = (sliver.delegate as SliverChildListDelegate).children;
+    final importedIndex = children.indexWhere(
+      (child) => child.key == const Key('imported-productschool-1'),
+    );
+    final staticVideoIndex = children.indexWhere(
+      (child) => child.key == const Key('home-static-video-post'),
+    );
+    expect(importedIndex, greaterThanOrEqualTo(0));
+    expect(staticVideoIndex, greaterThanOrEqualTo(0));
+    expect(importedIndex, lessThan(staticVideoIndex));
   });
 
   testWidgets('首页作者头像使用本地头像资源组件', (tester) async {

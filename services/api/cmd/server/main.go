@@ -22,7 +22,9 @@ import (
 	"creatorhub/api/internal/database"
 	"creatorhub/api/internal/friend"
 	"creatorhub/api/internal/homefeed"
+	"creatorhub/api/internal/quarkshortdrama"
 	"creatorhub/api/internal/scraper"
+	"creatorhub/api/internal/shortdrama"
 	"creatorhub/api/internal/video"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -66,6 +68,8 @@ type server struct {
 	friends          *friend.Repository
 	videos           *video.Repository
 	homePosts        homePostStore
+	shortDramas      shortDramaStore
+	quark            shortDramaPreviewer
 	tokens           *auth.TokenManager
 	scraper          scraperController
 	scraperScheduler schedulerView
@@ -94,6 +98,8 @@ func main() {
 		friends:          friend.NewRepository(db),
 		videos:           video.NewRepository(db),
 		homePosts:        homefeed.NewRepository(db),
+		shortDramas:      shortdrama.NewRepository(db),
+		quark:            quarkshortdrama.NewClient(&http.Client{Timeout: 20 * time.Second}, os.Getenv("QUARK_API_HOST")),
 		tokens:           auth.NewTokenManager(cfg.Auth.TokenSecret, cfg.Auth.TokenTTL),
 		scraper:          scraperService,
 		scraperScheduler: scheduler,
@@ -103,6 +109,8 @@ func main() {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, response{Code: 0, Message: "ok"}) })
 	mux.HandleFunc("GET /api/v1/videos", api.requireAuth(api.listVideos))
 	mux.HandleFunc("GET /api/v1/home/posts", api.requireAuth(api.listHomePosts))
+	mux.HandleFunc("GET /api/v1/short-dramas", api.requireAuth(api.listShortDramas))
+	mux.HandleFunc("GET /api/v1/short-dramas/{id}/episodes/{index}/play-url", api.requireAuth(api.shortDramaPlayURL))
 	mux.HandleFunc("POST /api/v1/admin/scraper/run", api.requireAdmin(api.runScraper))
 	mux.HandleFunc("GET /api/v1/admin/scraper/status", api.requireAdmin(api.scraperStatus))
 	mux.HandleFunc("POST /api/v1/auth/register", api.register)

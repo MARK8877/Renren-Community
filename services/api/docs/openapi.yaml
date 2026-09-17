@@ -13,6 +13,7 @@ tags:
   - name: Auth
   - name: Videos
   - name: Home
+  - name: ShortDramas
   - name: Conversations
   - name: Groups
   - name: Messages
@@ -76,6 +77,69 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/ServerError'
+
+  /api/v1/short-dramas:
+    get:
+      tags: [ShortDramas]
+      summary: 分页读取短剧
+      operationId: listShortDramas
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 短剧列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShortDramaListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/v1/short-dramas/{id}/episodes/{index}/play-url:
+    get:
+      tags: [ShortDramas]
+      summary: 刷新指定剧集播放地址
+      operationId: getShortDramaEpisodePlayURL
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: index
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: 临时播放地址
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayURLResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          description: 上游播放地址刷新失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseBase'
 
   /api/v1/admin/scraper/run:
     post:
@@ -1528,3 +1592,88 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FriendRequest'
+    ShortDramaEpisode:
+      type: object
+      required: [episode, title]
+      properties:
+        episode:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+        pwdId:
+          type: string
+          description: 夸克公开分享标识
+        fid:
+          type: string
+        fidToken:
+          type: string
+        size:
+          type: integer
+          format: int64
+        duration:
+          type: integer
+          format: int64
+        url:
+          type: string
+          format: uri
+          description: 最近一次采集到的临时地址，可能已过期
+        m3u8url:
+          type: string
+          format: uri
+    ShortDrama:
+      type: object
+      required: [id, sourceId, sourceName, externalId, name, totalEpisodes, episodes]
+      properties:
+        id:
+          type: integer
+          format: int64
+        sourceId:
+          type: integer
+        sourceName:
+          type: string
+        externalId:
+          type: string
+        name:
+          type: string
+        updateTime:
+          type: string
+          format: date-time
+        totalEpisodes:
+          type: integer
+        episodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShortDramaEpisode'
+    ShortDramaListResponse:
+      type: object
+      required: [code, message, data]
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShortDrama'
+    PlayURL:
+      type: object
+      required: [url, duration]
+      properties:
+        url:
+          type: string
+          format: uri
+        duration:
+          type: integer
+          format: int64
+    PlayURLResponse:
+      type: object
+      required: [code, message, data]
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/PlayURL'
