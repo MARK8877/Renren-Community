@@ -56,9 +56,14 @@ class ShortDramaData {
 }
 
 class ShortDramaPlayback {
-  const ShortDramaPlayback({required this.url, required this.duration});
+  const ShortDramaPlayback({
+    required this.url,
+    required this.duration,
+    this.session = '',
+  });
   final String url;
   final int duration;
+  final String session;
 }
 
 class ShortDramaApi {
@@ -118,15 +123,42 @@ class ShortDramaApi {
       final json = jsonDecode(response.body) as Map<String, dynamic>;
       _checkResponse(response.statusCode, json);
       final data = json['data'] as Map<String, dynamic>? ?? const {};
+      final url = data['url'] as String? ?? '';
       return ShortDramaPlayback(
-        url: data['url'] as String? ?? '',
+        url: url,
         duration: (data['duration'] as num?)?.toInt() ?? 0,
+        session: data['session'] as String? ?? sessionFromUrl(url),
       );
     } on ShortDramaApiException {
       rethrow;
     } catch (error) {
       throw ShortDramaApiException('无法连接短剧服务: $error');
     }
+  }
+
+  Future<void> release(String token, int dramaId, String session) async {
+    if (session.trim().isEmpty) return;
+    try {
+      final response = await _client.post(
+        Uri.parse('$_baseUrl/api/v1/short-dramas/$dramaId/playback/release'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'session': session}),
+      );
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      _checkResponse(response.statusCode, json);
+    } on ShortDramaApiException {
+      rethrow;
+    } catch (error) {
+      throw ShortDramaApiException('无法关闭短剧播放会话: $error');
+    }
+  }
+
+  static String sessionFromUrl(String rawUrl) {
+    final uri = Uri.tryParse(rawUrl);
+    return uri?.queryParameters['session'] ?? '';
   }
 
   void _checkResponse(int status, Map<String, dynamic> json) {

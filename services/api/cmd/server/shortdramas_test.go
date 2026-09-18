@@ -89,3 +89,75 @@ func TestShortDramaPlayURLDoesNotExposeToken(t *testing.T) {
 		t.Fatal("play response exposes stoken")
 	}
 }
+
+func TestShortDramaPlayURLUsesLocalLibrary(t *testing.T) {
+	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/ui/playback/open":
+			_, _ = w.Write([]byte(`{"session":"session-1"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer local.Close()
+
+	api := &server{
+		shortDramas: fakeShortDramaStore{record: shortdrama.DramaRecord{
+			ID:    10,
+			Drama: shortdrama.Drama{SourceID: localDramaSourceID, ExternalID: "hongguo:demo", Episodes: []shortdrama.Episode{{Episode: 1}}},
+		}},
+		localDrama: newLocalDramaPlayback(local.URL),
+		tokens:     auth.NewTokenManager([]byte("test-secret-with-at-least-32-characters"), time.Hour),
+	}
+	token, _, _ := api.tokens.Create(1, "user")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/short-dramas/10/episodes/1/play-url", nil)
+	req.SetPathValue("id", "10")
+	req.SetPathValue("index", "1")
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+	api.requireAuth(api.shortDramaPlayURL).ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.Code)
+	}
+	if !strings.Contains(res.Body.String(), local.URL+"/api/ui/playback/stream") {
+		t.Fatalf("local playback URL was not returned: %s", res.Body.String())
+	}
+}
+
+func TestShortDramaReleaseClosesLocalPlaybackSession(t *testing.T) {
+	var received map[string]any
+	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/ui/playback/control" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer local.Close()
+
+	api := &server{
+		shortDramas: fakeShortDramaStore{record: shortdrama.DramaRecord{
+			ID: 11,
+			Drama: shortdrama.Drama{SourceID: localDramaSourceID, Episodes: []shortdrama.Episode{{Episode: 1}}},
+		}},
+		localDrama: newLocalDramaPlayback(local.URL),
+		tokens:     auth.NewTokenManager([]byte("test-secret-with-at-least-32-characters"), time.Hour),
+	}
+	token, _, _ := api.tokens.Create(1, "user")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/short-dramas/11/playback/release", strings.NewReader(`{"session":"session-1"}`))
+	req.SetPathValue("id", "11")
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+	api.requireAuth(api.shortDramaRelease).ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.Code)
+	}
+	if received["session"] != "session-1" || received["action"] != "close" {
+		t.Fatalf("unexpected control payload: %#v", received)
+	}
+}

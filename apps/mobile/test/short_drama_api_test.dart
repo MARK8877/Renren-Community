@@ -35,6 +35,30 @@ void main() {
       '/api/v1/short-dramas/7/episodes/2/play-url',
     );
   });
+
+  test('releases the source playback session after controller disposal', () async {
+    final client = _QueueClient(
+      (request) async => http.Response(
+        '{"code":0,"message":"ok","data":{}}',
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      ),
+    );
+    final api = ShortDramaApi(client: client, baseUrl: 'http://api.test');
+
+    await api.release('token', 7, 'source-session-1');
+
+    expect(client.requests.single.method, 'POST');
+    expect(
+      client.requests.single.url.path,
+      '/api/v1/short-dramas/7/playback/release',
+    );
+    expect(client.requests.single.headers['Authorization'], 'Bearer token');
+    expect(
+      await client.requests.single.finalize().bytesToString(),
+      '{"session":"source-session-1"}',
+    );
+  });
 }
 
 class _QueueClient extends http.BaseClient {

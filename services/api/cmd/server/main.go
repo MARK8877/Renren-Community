@@ -70,6 +70,7 @@ type server struct {
 	homePosts        homePostStore
 	shortDramas      shortDramaStore
 	quark            shortDramaPreviewer
+	localDrama       *localDramaPlayback
 	tokens           *auth.TokenManager
 	scraper          scraperController
 	scraperScheduler schedulerView
@@ -100,6 +101,7 @@ func main() {
 		homePosts:        homefeed.NewRepository(db),
 		shortDramas:      shortdrama.NewRepository(db),
 		quark:            quarkshortdrama.NewClient(&http.Client{Timeout: 20 * time.Second}, os.Getenv("QUARK_API_HOST")),
+		localDrama:       newLocalDramaPlayback(os.Getenv("LOCAL_DRAMA_BASE_URL")),
 		tokens:           auth.NewTokenManager(cfg.Auth.TokenSecret, cfg.Auth.TokenTTL),
 		scraper:          scraperService,
 		scraperScheduler: scheduler,
@@ -111,6 +113,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/home/posts", api.requireAuth(api.listHomePosts))
 	mux.HandleFunc("GET /api/v1/short-dramas", api.requireAuth(api.listShortDramas))
 	mux.HandleFunc("GET /api/v1/short-dramas/{id}/episodes/{index}/play-url", api.requireAuth(api.shortDramaPlayURL))
+	mux.HandleFunc("POST /api/v1/short-dramas/{id}/playback/release", api.requireAuth(api.shortDramaRelease))
 	mux.HandleFunc("POST /api/v1/admin/scraper/run", api.requireAdmin(api.runScraper))
 	mux.HandleFunc("GET /api/v1/admin/scraper/status", api.requireAdmin(api.scraperStatus))
 	mux.HandleFunc("POST /api/v1/auth/register", api.register)
